@@ -27,7 +27,6 @@
   {\large \textbf{Semester:} Fall 2025}\\[2em]
 \end{center}
 
-\noindent
 \textbf{Team:} \underline{\hspace{12cm}}\\[1em]
 \textbf{Project Title:} \underline{\hspace{12cm}}\\[1em]
 \textbf{Keywords:} \underline{\hspace{12cm}}\\[2em]
@@ -35,8 +34,6 @@
 \section*{Proposal Description}
 
 \subsection*{1. Problem Statement}
-\vspace{0.5em}
-\noindent
 This project addresses the challenge of performing \textbf{3D facial modeling and biometric verification using only standard RGB cameras} without requiring specialized depth or infrared hardware. Current systems often rely on expensive and bulky sensors to capture detailed 3D information, which limits their accessibility and practical deployment.\\
 
 This limitation motivates the development of novel algorithms and techniques that can infer accurate 3D facial structures and verify identities solely from conventional 2D images. Achieving this goal involves overcoming difficulties such as varying lighting conditions, pose variations, and the inherently ambiguous nature of monocular depth estimation.\\
@@ -46,9 +43,6 @@ The core problem is to design a robust and efficient method that enables reliabl
 \vspace{2em}
 
 \subsection*{2. Background}
-\vspace{0.5em}
-\noindent
-
 As seen in Apple's Face ID technology, traditional 3D facial modeling and biometric verification systems often rely on specialized hardware such as infrared cameras or structured light sensors. These systems provide high accuracy but are limited by cost and complexity, as evidenced by their exclusion from cheaper devices. Their cost, size, and environmental constraints, such as sensitivity to harsher lighting conditions, make them impractical for widespread use in certain market segments.\\
 
 Recent machine vision and deep learning advances have enabled partial 3D reconstruction from 2D images. Classical methods like Structure from Motion (SfM) and Multi-View Stereo (MVS) reconstruct dense point clouds by matching features across multiple images. However, these methods require extensive calibration and multiple viewpoints, affecting consumer usability. Newer methods, particularly 3D Morphable Models (3DMMs), and neural regressors like DECA and EMOCA, can infer facial geometry and texture directly from one or more RGB images using learned shape and expression priors. Despite this, many systems depend on controlled data capture environments or precise calibration setups. Here, ``no calibration'' refers to the absence of external calibration targets such as checkerboards; a short guided Face ID\textendash{}style scan to capture multiple RGB views is allowed.\\
@@ -56,9 +50,6 @@ Recent machine vision and deep learning advances have enabled partial 3D reconst
 \vspace{2em}
 
 \subsection*{3. Objective}
-\vspace{0.5em}
-\noindent
-
 The objective of this project is to develop a robust and efficient machine vision system capable of performing accurate 3D facial modeling and biometric verification using only standard RGB cameras, without the need for specialized depth or infrared hardware. The specific goals are:
 
 \begin{enumerate}
@@ -72,27 +63,25 @@ The objective of this project is to develop a robust and efficient machine visio
 \vspace{2em}
 
 \subsection*{4. Approach}
-\vspace{0.5em}
-\noindent
-Outline the methodology and techniques you plan to use to tackle the problem. Include details about data sources, algorithms, tools, and experimental design considerations.
+The implementation will proceed in progressive, testable stages to balance speed, accuracy, and feasibility within the semester timeline. The goal is to create a calibration-free yet geometrically consistent 3D face modeling and verification pipeline.
+
+\begin{enumerate}
+  \item \textbf{Data Acquisition:} Capture multiple RGB frames per subject using a standard webcam or smartphone camera. Use a guided enrollment interface prompting the user to rotate their head (±45° yaw) in well-lit conditions, similar to a Face ID capture. No external calibration targets (checkerboards or fiducials) will be required.
+  \item \textbf{Preprocessing and Landmark Extraction:} Detect facial landmarks using \textit{MediaPipe Face Mesh} for reliable tracking across frames. Align and crop each frame to normalize scale and position before reconstruction.
+  \item \textbf{3D Reconstruction:} Feed normalized images into a pretrained \textit{DECA (Detailed Expression Capture and Analysis)} or \textit{EMOCA} model to generate 3D mesh representations with expression and texture details. Optionally, test a Structure-from-Motion baseline (OpenCV + Open3D) for comparison.
+  \item \textbf{Verification and Feature Embedding:} Extract 512-dimensional \textit{ArcFace} embeddings from the reconstructed meshes or canonicalized renders. Compute cosine similarity between embeddings of different scans to evaluate verification performance.
+  \item \textbf{Evaluation and Benchmarking:} Evaluate reconstruction quality (visual consistency, mesh completeness) and verification accuracy (ROC, EER). Compare against 2D-only baselines and, where possible, depth-based benchmarks.
+  \item \textbf{Deployment and Visualization:} Integrate components into a streamlined Python pipeline. Use \textit{Open3D} or \textit{trimesh} for real-time 3D mesh visualization and export to .obj or .ply format for presentation.
+\end{enumerate}
 
 \vspace{2em}
 
 \subsection*{5. Expected Outcome}
-\vspace{0.5em}
-\noindent
-Describe the anticipated results or deliverables of the project. Explain how these outcomes will demonstrate the success of your approach.
+The expected outcome of this project is a functional prototype capable of reconstructing a 3D facial model and performing identity verification using only RGB images captured from standard consumer cameras. The resulting system will serve as a proof of concept for calibration-free 3D face modeling and will demonstrate that learned geometric priors can substitute traditional depth or multi-camera setups. Quantitative evaluation will include reconstruction fidelity, recognition accuracy, and computational performance. Qualitatively, the system should generate visually consistent meshes under varying illumination and pose, proving its robustness in uncontrolled environments. The project deliverables will include a Python-based software pipeline, 3D visualization outputs, a verification evaluation report, and a short recorded demonstration.
 
 \vspace{2em}
 
 \subsection*{6. Significance}
-\vspace{0.5em}
-\noindent
-Discuss the importance and potential impact of your project within the field of machine vision. Include possible applications, benefits, and contributions to research or industry.
-
-\vspace{3em}
-
-\noindent
-\textbf{Prepared by:} \underline{\hspace{6cm}} \hfill \textbf{Date:} \underline{\hspace{4cm}}
+This project contributes to the advancement of accessible biometric technology by showing that high-quality 3D face reconstruction can be achieved without specialized equipment. By leveraging deep learning–based shape and expression models, the work broadens the reach of machine vision applications in authentication, AR/VR, and human–computer interaction. The calibration-free approach also promotes inclusivity, enabling research and deployment in low-resource environments. Beyond its practical implications, the project reinforces the connection between geometry, physics-based vision, and learning—core themes of the Machine Vision course. Ultimately, the system demonstrates how computational intelligence can extract three-dimensional structure and identity information directly from standard image data, bridging the gap between academic research and real-world biometric deployment.
 
 \end{document}
