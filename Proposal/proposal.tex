@@ -58,7 +58,16 @@ Recent machine vision and deep learning advances have enabled partial 3D reconst
 \subsection*{3. Objective}
 \vspace{0.5em}
 \noindent
-State the primary goals and objectives of your project. What do you intend to achieve by the end of this work?
+
+The objective of this project is to develop a robust and efficient machine vision system capable of performing accurate 3D facial modeling and biometric verification using only standard RGB cameras, without the need for specialized depth or infrared hardware. The specific goals are:
+
+\begin{enumerate}
+  \item Develop a guided face-scanning pipeline allowing users to perform a short head rotation, similar to a Face ID enrollment process, to capture multiple RGB views.
+  \item Apply learning-based reconstruction models (e.g., DECA, EMOCA) for inferring detailed 3D facial geometry and texture from captured images.
+  \item Extract identity descriptors (e.g., ArcFace embeddings) from reconstructed faces and evaluate their performance in biometric verification.
+  \item Compare performance of the proposed RGB-only method with existing depth-assisted or calibrated methods in terms of reconstruction accuracy and verification reliability.
+  \item Deliver a proof-of-concept system demonstrating calibration-free 3D face modeling and verification on standard consumer devices.
+\end{enumerate}
 
 \vspace{2em}
 
