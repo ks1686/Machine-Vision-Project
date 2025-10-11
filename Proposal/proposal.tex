@@ -4,6 +4,7 @@
 \usepackage{titlesec}
 \usepackage{enumitem}
 \usepackage{hyperref}
+\usepackage{array}
 
 \titleformat{\section}{\large\bfseries}{\thesection}{1em}{}
 \titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{1em}{}
@@ -13,7 +14,7 @@
   linkcolor=blue,
   urlcolor=blue,
   pdftitle={Machine Vision Project Proposal},
-  pdfauthor={Graduate Student Team},
+  pdfauthor={Graduate Students Karim Smires, Kareem Kholaif},
   pdfsubject={Machine Vision Course Proposal},
   pdfkeywords={Machine Vision, Computer Vision, Image Processing, Project Proposal}
 }
@@ -27,25 +28,28 @@
   {\large \textbf{Semester:} Fall 2025}\\[2em]
 \end{center}
 
-\textbf{Team:} \underline{\hspace{12cm}}\\[1em]
-\textbf{Project Title:} \underline{\hspace{12cm}}\\[1em]
-\textbf{Keywords:} \underline{\hspace{12cm}}\\[2em]
+\begin{tabular}{@{}>{\bfseries}l@{\hspace{0.75em}}p{0.7\textwidth}@{}}
+  Project Title: & Calibration-Free 3D Facial Biometrics with RGB Cameras\\
+  Keywords: & 3D face reconstruction, biometric verification, RGB cameras, deep learning, calibration-free vision
+\end{tabular}
+
+\vspace{2em}
 
 \section*{Proposal Description}
 
 \subsection*{1. Problem Statement}
-This project addresses the challenge of performing \textbf{3D facial modeling and biometric verification using only standard RGB cameras} without requiring specialized depth or infrared hardware. Current systems often rely on expensive and bulky sensors to capture detailed 3D information, which limits their accessibility and practical deployment.\\
+This project addresses the challenge of performing \textbf{3D facial modeling and biometric verification using only standard RGB cameras} without requiring specialized depth or infrared hardware. Current systems often rely on expensive and bulky sensors to capture detailed 3D information, which limits their accessibility and practical deployment.
 
-This limitation motivates the development of novel algorithms and techniques that can infer accurate 3D facial structures and verify identities solely from conventional 2D images. Achieving this goal involves overcoming difficulties such as varying lighting conditions, pose variations, and the inherently ambiguous nature of monocular depth estimation.\\
+This limitation motivates the development of novel algorithms and techniques that can infer accurate 3D facial structures and verify identities solely from conventional 2D images. Achieving this goal involves overcoming difficulties such as varying lighting conditions, pose variations, and the inherently ambiguous nature of monocular depth estimation.
 
-The core problem is to design a robust and efficient method that enables reliable 3D facial recognition and verification using ubiquitous RGB imaging devices, thereby expanding the applicability of biometric technologies to a wider range of environments and users without specialized sensing.\\
+The core problem is to design a robust and efficient method that enables reliable 3D facial recognition and verification using ubiquitous RGB imaging devices, thereby expanding the applicability of biometric technologies to a wider range of environments and users without specialized sensing.
 
 \vspace{2em}
 
 \subsection*{2. Background}
-As seen in Apple's Face ID technology, traditional 3D facial modeling and biometric verification systems often rely on specialized hardware such as infrared cameras or structured light sensors. These systems provide high accuracy but are limited by cost and complexity, as evidenced by their exclusion from cheaper devices. Their cost, size, and environmental constraints, such as sensitivity to harsher lighting conditions, make them impractical for widespread use in certain market segments.\\
+As seen in Apple's Face ID technology, traditional 3D facial modeling and biometric verification systems often rely on specialized hardware such as infrared cameras or structured light sensors. These systems provide high accuracy but are limited by cost and complexity, as evidenced by their exclusion from cheaper devices. Their cost, size, and environmental constraints, such as sensitivity to harsher lighting conditions, make them impractical for widespread use in certain market segments.
 
-Recent machine vision and deep learning advances have enabled partial 3D reconstruction from 2D images. Classical methods like Structure from Motion (SfM) and Multi-View Stereo (MVS) reconstruct dense point clouds by matching features across multiple images. However, these methods require extensive calibration and multiple viewpoints, affecting consumer usability. Newer methods, particularly 3D Morphable Models (3DMMs), and neural regressors like DECA and EMOCA, can infer facial geometry and texture directly from one or more RGB images using learned shape and expression priors. Despite this, many systems depend on controlled data capture environments or precise calibration setups. Here, ``no calibration'' refers to the absence of external calibration targets such as checkerboards; a short guided Face ID\textendash{}style scan to capture multiple RGB views is allowed.\\
+Recent machine vision and deep learning advances have enabled partial 3D reconstruction from 2D images. Classical methods like Structure from Motion (SfM) and Multi-View Stereo (MVS) reconstruct dense point clouds by matching features across multiple images. However, these methods require extensive calibration and multiple viewpoints, affecting consumer usability. Newer methods, particularly 3D Morphable Models (3DMMs), and neural regressors like DECA and EMOCA, can infer facial geometry and texture directly from one or more RGB images using learned shape and expression priors. Despite this, many systems depend on controlled data capture environments or precise calibration setups. Here, ``no calibration'' refers to the absence of external calibration targets such as checkerboards; a short guided Face ID\textendash{}style scan to capture multiple RGB views is allowed.
 
 \vspace{2em}
 
