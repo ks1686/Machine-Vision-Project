@@ -3,7 +3,7 @@ face_processing.py
 ------------------
 Utilities for face detection, quality assessment, alignment, and saving.
 
-Notes for tuning (common in coursework/prototyping):
+Notes for tuning (coursework/prototyping):
 - MIN_BLUR_VAR: Laplacian variance threshold; laptop webcams often yield 5–20 even when “ok”.
   If you see many rejections, lower this. If you want stricter data, raise it.
 - BRIGHTNESS_RANGE: Mean grayscale range. In dim rooms, widen the range or improve lighting.
@@ -15,19 +15,21 @@ is horizontal and then crops a padded region before resizing.
 """
 
 from __future__ import annotations
-import cv2
-import numpy as np
-import mediapipe.python.solutions.face_mesh as mp_face_mesh
-import time
-import os
+
 import atexit
-import pandas as pd
+import os
+import time
 from dataclasses import dataclass
-from typing import Tuple, Optional, Any, cast
+from typing import Any, Optional, Tuple, cast
+
+import cv2
+import mediapipe.python.solutions.face_mesh as mp_face_mesh
+import numpy as np
+import pandas as pd
 
 # -------- Quality / alignment parameters (tune here as needed) --------
 MIN_BLUR_VAR = (
-    10.0  # Variance of Laplacian on pre-sharpened ROI; tuned for laptop webcams
+    10.0  # Variance of Laplacian on pre-sharpened ROI (tuned for laptop webcams)
 )
 MIN_BBOX_RATIO = 0.04  # min face area / frame area (lowered for testing)
 BRIGHTNESS_RANGE = (40, 235)  # acceptable mean grayscale (wider for testing)
@@ -42,9 +44,7 @@ _FACE_MESH = None
 
 
 def get_face_mesh():
-    """
-    Return a persistent MediaPipe FaceMesh instance (single-face). Re-using the instance avoids per-frame initialization overhead.
-    """
+    """Return a persistent MediaPipe FaceMesh instance (single-face)."""
     global _FACE_MESH
     if _FACE_MESH is None:
         _FACE_MESH = mp_face_mesh.FaceMesh(
@@ -57,9 +57,9 @@ def get_face_mesh():
     return _FACE_MESH
 
 
-# Ensure FaceMesh is closed on exit to release resources
 @atexit.register
 def _close_face_mesh():
+    """Close FaceMesh on interpreter exit to release resources."""
     global _FACE_MESH
     if _FACE_MESH is not None:
         try:
@@ -85,54 +85,19 @@ def brightness_mean(img_gray: np.ndarray) -> float:
     return float(np.mean(img_gray))
 
 
-def eye_aligned_face(
-    frame_bgr: np.ndarray,
-    landmarks: np.ndarray,
-    bbox_xywh: Tuple[int, int, int, int],
-    target_size: Tuple[int, int] = (224, 224),
+def _unsharp_mask(gray: np.ndarray, amount: float = 1.5, radius: int = 1) -> np.ndarray:
+    """Simple unsharp mask to boost edges; helps low-res laptop webcams."""
+    blurred = cv2.GaussianBlur(gray, (radius * 2 + 1, radius * 2 + 1), 0)
+    sharp = cv2.addWeighted(gray, 1 + amount, blurred, -amount, 0)
+    return np.clip(sharp, 0, 255).astype(np.uint8)
+
+
+def _clahe(
+    gray: np.ndarray, clip: float = 2.0, tiles: Tuple[int, int] = (8, 8)
 ) -> np.ndarray:
-    """Rotate the frame so the eye line is horizontal, crop a padded face ROI, and return a resized aligned image.
-    Args:
-      frame_bgr: Original BGR frame.
-      landmarks: (468,2) array of pixel landmarks.
-      bbox_xywh: Bounding box around face (x,y,w,h).
-      target_size: (H,W) for output; square recommended for most models.
-    """
-    x, y, w, h = bbox_xywh
-    # Compute eye centers from FaceMesh landmarks (pixel coords)
-    left_eye = landmarks[LEFT_EYE_IDX]
-    right_eye = landmarks[RIGHT_EYE_IDX]
-
-    # Angle to rotate so the eyes are horizontal
-    dy = right_eye[1] - left_eye[1]
-    dx = right_eye[0] - left_eye[0]
-    angle = np.degrees(np.arctan2(dy, dx))
-
-    # Rotate the whole frame around the bbox center (robust crop afterward)
-    center = (x + w // 2, y + h // 2)
-    M = cv2.getRotationMatrix2D(
-        center, -angle, 1.0
-    )  # Rotate by the negative angle so the eye-line is leveled.
-    rotated = cv2.warpAffine(
-        frame_bgr,
-        M,
-        (frame_bgr.shape[1], frame_bgr.shape[0]),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REFLECT,
-    )
-
-    # Pad the box to include forehead/chin so alignment doesn’t crop too tightly.
-    pad = int(0.2 * max(w, h))
-    rx, ry = max(0, x - pad), max(0, y - pad)
-    rw = min(rotated.shape[1] - rx, w + 2 * pad)
-    rh = min(rotated.shape[0] - ry, h + 2 * pad)
-    crop = rotated[ry : ry + rh, rx : rx + rw]
-
-    # Final resize
-    face_aligned = cv2.resize(
-        crop, (target_size[1], target_size[0]), interpolation=cv2.INTER_AREA
-    )
-    return face_aligned
+    """Local contrast normalization helps low-light laptop cameras."""
+    clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=tiles)
+    return clahe.apply(gray)
 
 
 def detect_face_and_landmarks(
@@ -145,7 +110,6 @@ def detect_face_and_landmarks(
     h, w = frame_bgr.shape[:2]
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
-    # Use a persistent FaceMesh instance for performance
     fm = get_face_mesh()
     res = cast(Any, fm.process(rgb))
 
@@ -164,19 +128,49 @@ def detect_face_and_landmarks(
     return bbox, landmarks_xy
 
 
-def _unsharp_mask(gray: np.ndarray, amount: float = 1.5, radius: int = 1) -> np.ndarray:
-    # Simple unsharp mask: sharpen edges to boost Laplacian variance on soft images
-    blurred = cv2.GaussianBlur(gray, (radius * 2 + 1, radius * 2 + 1), 0)
-    sharp = cv2.addWeighted(gray, 1 + amount, blurred, -amount, 0)
-    return np.clip(sharp, 0, 255).astype(np.uint8)
-
-
-def _clahe(
-    gray: np.ndarray, clip: float = 2.0, tiles: Tuple[int, int] = (8, 8)
+def eye_aligned_face(
+    frame_bgr: np.ndarray,
+    landmarks: np.ndarray,
+    bbox_xywh: Tuple[int, int, int, int],
+    target_size: Tuple[int, int] = (224, 224),
 ) -> np.ndarray:
-    # Local contrast normalization helps low-light laptop cameras
-    clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=tiles)
-    return clahe.apply(gray)
+    """
+    Rotate the frame so the eye line is horizontal, crop a padded face ROI, and return a resized aligned image.
+    Args:
+      frame_bgr: Original BGR frame.
+      landmarks: (468,2) array of pixel landmarks.
+      bbox_xywh: Bounding box around face (x,y,w,h).
+      target_size: (H,W) for output; square recommended for most models.
+    """
+    x, y, w, h = bbox_xywh
+    left_eye = landmarks[LEFT_EYE_IDX]
+    right_eye = landmarks[RIGHT_EYE_IDX]
+
+    dy = right_eye[1] - left_eye[1]
+    dx = right_eye[0] - left_eye[0]
+    angle = np.degrees(np.arctan2(dy, dx))
+
+    center = (x + w // 2, y + h // 2)
+    M = cv2.getRotationMatrix2D(center, -angle, 1.0)  # negative to level
+    rotated = cv2.warpAffine(
+        frame_bgr,
+        M,
+        (frame_bgr.shape[1], frame_bgr.shape[0]),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REFLECT,
+    )
+
+    # Pad the box to include forehead/chin so alignment doesn’t crop too tightly.
+    pad = int(0.2 * max(w, h))
+    rx, ry = max(0, x - pad), max(0, y - pad)
+    rw = min(rotated.shape[1] - rx, w + 2 * pad)
+    rh = min(rotated.shape[0] - ry, h + 2 * pad)
+    crop = rotated[ry : ry + rh, rx : rx + rw]
+
+    face_aligned = cv2.resize(
+        crop, (target_size[1], target_size[0]), interpolation=cv2.INTER_AREA
+    )
+    return face_aligned
 
 
 def assess_quality(
@@ -184,13 +178,12 @@ def assess_quality(
 ) -> FaceQuality:
     """
     Compute blur (variance of Laplacian) on a sharpened ROI, brightness on original ROI, and face box ratio.
-    Lower laptops often yield blur<20; thresholds below are intentionally lenient for in-class demos.
     """
     h, w = frame_bgr.shape[:2]
     x, y, bw, bh = bbox_xywh
     face = frame_bgr[y : y + bh, x : x + bw]
+
     gray0 = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
-    # Preprocess to help low-res/low-light webcams
     gray_eq = _clahe(gray0)
     gray = _unsharp_mask(gray_eq, amount=1.5, radius=1)
 
