@@ -5,10 +5,10 @@ Captures face images via webcam and stores them for later processing.
 """
 
 import cv2
-import cv2.data
 import os
 import time
 import uuid
+from face_processing import process_frame
 
 # Directory to save registered face images
 OUTPUT_DIR = "registered_faces"
@@ -41,21 +41,52 @@ def capture_face_images(user_id: str, num_images: int = 10):
             print("Error: Could not read frame from webcam.")
             continue
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        # Use Haar Cascade for face detection
-        face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        metrics_text = ""
+        # Use backend processor (detects, quality-checks, aligns, saves, and logs metadata)
+        base_name = f"{user_id}_{uuid.uuid4().hex}"
+        result = process_frame(
+            frame_bgr=frame,
+            user_id=user_id,
+            out_dir=user_dir,
+            base_name=base_name,
+            return_metrics=True,
         )
-        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-
-        for x, y, w, h in faces:
-            face_crop = frame[y : y + h, x : x + w]
-            filename = os.path.join(user_dir, f"{user_id}_{str(uuid.uuid4())}.jpg")
-            cv2.imwrite(filename, face_crop)
+        saved_path, q = result if isinstance(result, tuple) else (result, None)
+        if saved_path:
             count += 1
-            print(f"Captured image {count}/{num_images} for user ID: {user_id}")
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+            print(f"Captured {count}/{num_images}: {saved_path}")
+            status_text = f"Saved {count}/{num_images}"
+            color = (0, 200, 0)
+        else:
+            # Show reasons and current metrics if available
+            if q is not None:
+                status_text = f"Rejected: {q.reasons or 'quality too low'}"
+                metrics_text = f"blur(Lap) {q.blur_var:.0f} | bright {q.brightness:.0f} | box {q.bbox_ratio:.3f}"
+            else:
+                status_text = "No valid face detected"
+                metrics_text = ""
+            color = (0, 0, 255)
+        cv2.putText(
+            frame,
+            status_text,
+            (12, 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+        if not saved_path and q is not None:
+            cv2.putText(
+                frame,
+                metrics_text,
+                (12, 54),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                color,
+                2,
+                cv2.LINE_AA,
+            )
 
         cv2.imshow("Face Capture", frame)
 
@@ -63,9 +94,9 @@ def capture_face_images(user_id: str, num_images: int = 10):
             print("Face capture interrupted by user.")
             break
 
-        time.sleep(0.5)  # Slight delay to avoid rapid captures
+        time.sleep(0.2)  # Slight delay to avoid rapid captures
 
-    print(f"Finished capturing images for user ID: {user_id}")
+    print(f"Finished capturing aligned images for user ID: {user_id}")
     cap.release()
     cv2.destroyAllWindows()
 

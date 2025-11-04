@@ -1,3 +1,6 @@
+.venv/
+__pycache__/
+.DS_Store
 Proposal/proposal.synctex.gz
 Proposal/proposal.out
 Proposal/proposal.log
@@ -5,6 +8,4 @@ Proposal/proposal.fdb_latexmk
 Proposal/proposal.aux
 Proposal/proposal.fls
 Proposal/proposal 2.log
-.DS_Store
-.venv/
-registered_faces/karim/
+registered_faces/
