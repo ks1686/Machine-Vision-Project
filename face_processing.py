@@ -3,15 +3,11 @@ face_processing.py
 ------------------
 Utilities for face detection, quality assessment, alignment, and saving.
 
-Notes for tuning (coursework/prototyping):
-- MIN_BLUR_VAR: Laplacian variance threshold; laptop webcams often yield 5–20 even when “ok”.
-  If you see many rejections, lower this. If you want stricter data, raise it.
-- BRIGHTNESS_RANGE: Mean grayscale range. In dim rooms, widen the range or improve lighting.
-- MIN_BBOX_RATIO: Face area / frame area. If you capture from farther away, lower this slightly.
-- OUTPUT_SIZE: Final aligned crop size for downstream models; keep square for CNNs.
-
-Face detection uses MediaPipe FaceMesh for robust landmarking; alignment rotates so the eye line
-is horizontal and then crops a padded region before resizing.
+Tunable parameters:
+- MIN_BLUR_VAR: laptop webcams often yield 5–20; raise for stricter blur checks.
+- BRIGHTNESS_RANGE: widen for dim rooms, tighten for controlled lighting.
+- MIN_BBOX_RATIO: face area / frame area; lower if users sit far from camera.
+- OUTPUT_SIZE: final aligned crop size (H, W).
 """
 
 from __future__ import annotations
@@ -23,23 +19,21 @@ from dataclasses import dataclass
 from typing import Any, Optional, Tuple, cast
 
 import cv2
-import mediapipe.python.solutions.face_mesh as mp_face_mesh
+from mediapipe.python.solutions import face_mesh as mp_face_mesh
 import numpy as np
 import pandas as pd
 
 # -------- Quality / alignment parameters (tune here as needed) --------
-MIN_BLUR_VAR = (
-    10.0  # Variance of Laplacian on pre-sharpened ROI (tuned for laptop webcams)
-)
-MIN_BBOX_RATIO = 0.04  # min face area / frame area (lowered for testing)
-BRIGHTNESS_RANGE = (40, 235)  # acceptable mean grayscale (wider for testing)
-OUTPUT_SIZE = (224, 224)  # aligned face size (H, W)
+MIN_BLUR_VAR = 10.0  # variance of Laplacian on sharpened ROI
+MIN_BBOX_RATIO = 0.04  # min face area / frame area
+BRIGHTNESS_RANGE = (40, 235)
+OUTPUT_SIZE = (224, 224)  # (H, W)
 
-# MediaPipe indices for outer eye corners; swap with mid-eye points if you prefer a different reference.
+# MediaPipe indices for outer eye corners.
 LEFT_EYE_IDX = 33
 RIGHT_EYE_IDX = 263
 
-# Lazily-initialized singleton FaceMesh instance (avoids per-frame re-creation).
+# Persistent FaceMesh
 _FACE_MESH = None
 
 
@@ -77,6 +71,9 @@ class FaceQuality:
     reasons: str = ""
 
 
+# ---- Metrics helpers ----
+
+
 def variance_of_laplacian(img_gray: np.ndarray) -> float:
     return float(cv2.Laplacian(img_gray, cv2.CV_64F).var())
 
@@ -100,19 +97,17 @@ def _clahe(
     return clahe.apply(gray)
 
 
+# ---- Core ops ----
+
+
 def detect_face_and_landmarks(
     frame_bgr: np.ndarray,
 ) -> Optional[Tuple[Tuple[int, int, int, int], np.ndarray]]:
-    """
-    Detect a single face and return (bbox_xywh, landmarks_xy) in pixel coordinates.
-    Returns None if no face is found.
-    """
+    """Return (bbox_xywh, landmarks_xy) in pixel coordinates; None if not found."""
     h, w = frame_bgr.shape[:2]
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-
     fm = get_face_mesh()
     res = cast(Any, fm.process(rgb))
-
     if not getattr(res, "multi_face_landmarks", None):
         return None
 
@@ -121,7 +116,6 @@ def detect_face_and_landmarks(
     ys = np.array([p.y for p in lm]) * h
     landmarks_xy = np.stack([xs, ys], axis=1)  # (468, 2)
 
-    # Bounding box from landmarks (tighter than a detector bbox)
     x_min, y_min = int(np.clip(xs.min(), 0, w - 1)), int(np.clip(ys.min(), 0, h - 1))
     x_max, y_max = int(np.clip(xs.max(), 0, w - 1)), int(np.clip(ys.max(), 0, h - 1))
     bbox = (x_min, y_min, max(1, x_max - x_min), max(1, y_max - y_min))
@@ -134,24 +128,16 @@ def eye_aligned_face(
     bbox_xywh: Tuple[int, int, int, int],
     target_size: Tuple[int, int] = (224, 224),
 ) -> np.ndarray:
-    """
-    Rotate the frame so the eye line is horizontal, crop a padded face ROI, and return a resized aligned image.
-    Args:
-      frame_bgr: Original BGR frame.
-      landmarks: (468,2) array of pixel landmarks.
-      bbox_xywh: Bounding box around face (x,y,w,h).
-      target_size: (H,W) for output; square recommended for most models.
-    """
+    """Rotate so the eye line is horizontal, crop a padded ROI, then resize."""
     x, y, w, h = bbox_xywh
     left_eye = landmarks[LEFT_EYE_IDX]
     right_eye = landmarks[RIGHT_EYE_IDX]
-
     dy = right_eye[1] - left_eye[1]
     dx = right_eye[0] - left_eye[0]
     angle = np.degrees(np.arctan2(dy, dx))
 
     center = (x + w // 2, y + h // 2)
-    M = cv2.getRotationMatrix2D(center, -angle, 1.0)  # negative to level
+    M = cv2.getRotationMatrix2D(center, -angle, 1.0)
     rotated = cv2.warpAffine(
         frame_bgr,
         M,
@@ -160,25 +146,21 @@ def eye_aligned_face(
         borderMode=cv2.BORDER_REFLECT,
     )
 
-    # Pad the box to include forehead/chin so alignment doesn’t crop too tightly.
-    pad = int(0.2 * max(w, h))
+    pad = int(0.2 * max(w, h))  # include forehead/chin
     rx, ry = max(0, x - pad), max(0, y - pad)
     rw = min(rotated.shape[1] - rx, w + 2 * pad)
     rh = min(rotated.shape[0] - ry, h + 2 * pad)
     crop = rotated[ry : ry + rh, rx : rx + rw]
 
-    face_aligned = cv2.resize(
+    return cv2.resize(
         crop, (target_size[1], target_size[0]), interpolation=cv2.INTER_AREA
     )
-    return face_aligned
 
 
 def assess_quality(
     frame_bgr: np.ndarray, bbox_xywh: Tuple[int, int, int, int]
 ) -> FaceQuality:
-    """
-    Compute blur (variance of Laplacian) on a sharpened ROI, brightness on original ROI, and face box ratio.
-    """
+    """Compute blur (Laplacian var), brightness, and face-box ratio; return reasons if rejected."""
     h, w = frame_bgr.shape[:2]
     x, y, bw, bh = bbox_xywh
     face = frame_bgr[y : y + bh, x : x + bw]
@@ -191,17 +173,20 @@ def assess_quality(
     bright = brightness_mean(gray0)
     bbox_ratio = (bw * bh) / float(w * h)
 
-    reasons_list = []
+    reasons = []
     if blur < MIN_BLUR_VAR:
-        reasons_list.append(f"blur {blur:.0f} < {MIN_BLUR_VAR}")
+        reasons.append(f"blur {blur:.0f} < {MIN_BLUR_VAR}")
     if bright < BRIGHTNESS_RANGE[0] or bright > BRIGHTNESS_RANGE[1]:
-        reasons_list.append(
+        reasons.append(
             f"brightness {bright:.0f} ∉ [{BRIGHTNESS_RANGE[0]}, {BRIGHTNESS_RANGE[1]}]"
         )
     if bbox_ratio < MIN_BBOX_RATIO:
-        reasons_list.append(f"bbox {bbox_ratio:.3f} < {MIN_BBOX_RATIO}")
-    passed = len(reasons_list) == 0
-    return FaceQuality(blur, bright, bbox_ratio, passed, "; ".join(reasons_list))
+        reasons.append(f"bbox {bbox_ratio:.3f} < {MIN_BBOX_RATIO}")
+
+    return FaceQuality(blur, bright, bbox_ratio, len(reasons) == 0, "; ".join(reasons))
+
+
+# ---- Metadata ----
 
 
 def ensure_csv(path: str):
@@ -224,8 +209,10 @@ def ensure_csv(path: str):
 
 def append_metadata(csv_path: str, row: dict):
     ensure_csv(csv_path)
-    df = pd.DataFrame([row])
-    df.to_csv(csv_path, mode="a", header=False, index=False)
+    pd.DataFrame([row]).to_csv(csv_path, mode="a", header=False, index=False)
+
+
+# ---- Public API ----
 
 
 def process_frame(
@@ -235,10 +222,7 @@ def process_frame(
     base_name: str,
     return_metrics: bool = False,
 ) -> Any:
-    """
-    Detect, quality-check, align, and save a single face frame.
-    If return_metrics=True, returns (path|None, FaceQuality). Otherwise returns path|None.
-    """
+    """Detect, quality-check, align, and save one face frame. Optionally return metrics."""
     detection = detect_face_and_landmarks(frame_bgr)
     if detection is None:
         if return_metrics:
@@ -254,14 +238,12 @@ def process_frame(
 
     aligned = eye_aligned_face(frame_bgr, landmarks, bbox, OUTPUT_SIZE)
     os.makedirs(out_dir, exist_ok=True)
-    fname = f"{base_name}.jpg"
-    fpath = os.path.join(out_dir, fname)
+    fpath = os.path.join(out_dir, f"{base_name}.jpg")
     cv2.imwrite(fpath, aligned, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
-    meta_csv = os.path.join(os.path.dirname(out_dir), "metadata.csv")
     h, w = frame_bgr.shape[:2]
     append_metadata(
-        meta_csv,
+        os.path.join(os.path.dirname(out_dir), "metadata.csv"),
         {
             "timestamp": int(time.time()),
             "user_id": user_id,
@@ -275,6 +257,7 @@ def process_frame(
             "aligned_w": OUTPUT_SIZE[1],
         },
     )
+
     if return_metrics:
         return fpath, q
     return fpath
