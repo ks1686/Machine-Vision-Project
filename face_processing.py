@@ -1,7 +1,17 @@
 """
 face_processing.py
+------------------
+Utilities for face detection, quality assessment, alignment, and saving.
 
-Processes faces in images: detection, quality assessment.
+Notes for tuning (common in coursework/prototyping):
+- MIN_BLUR_VAR: Laplacian variance threshold; laptop webcams often yield 5–20 even when “ok”.
+  If you see many rejections, lower this. If you want stricter data, raise it.
+- BRIGHTNESS_RANGE: Mean grayscale range. In dim rooms, widen the range or improve lighting.
+- MIN_BBOX_RATIO: Face area / frame area. If you capture from farther away, lower this slightly.
+- OUTPUT_SIZE: Final aligned crop size for downstream models; keep square for CNNs.
+
+Face detection uses MediaPipe FaceMesh for robust landmarking; alignment rotates so the eye line
+is horizontal and then crops a padded region before resizing.
 """
 
 from __future__ import annotations
@@ -15,7 +25,7 @@ import pandas as pd
 from dataclasses import dataclass
 from typing import Tuple, Optional, Any, cast
 
-# Change as needed when testing
+# -------- Quality / alignment parameters (tune here as needed) --------
 MIN_BLUR_VAR = (
     10.0  # Variance of Laplacian on pre-sharpened ROI; tuned for laptop webcams
 )
@@ -23,7 +33,7 @@ MIN_BBOX_RATIO = 0.04  # min face area / frame area (lowered for testing)
 BRIGHTNESS_RANGE = (40, 235)  # acceptable mean grayscale (wider for testing)
 OUTPUT_SIZE = (224, 224)  # aligned face size (H, W)
 
-# FaceMesh indices for outer eye corners (approx.)
+# MediaPipe indices for outer eye corners; swap with mid-eye points if you prefer a different reference.
 LEFT_EYE_IDX = 33
 RIGHT_EYE_IDX = 263
 
@@ -33,8 +43,7 @@ _FACE_MESH = None
 
 def get_face_mesh():
     """
-    Returns a persistent MediaPipe FaceMesh instance.
-    Keeps a single instance to reduce overhead and silence Pylance dynamic attribute warnings.
+    Return a persistent MediaPipe FaceMesh instance (single-face). Re-using the instance avoids per-frame initialization overhead.
     """
     global _FACE_MESH
     if _FACE_MESH is None:
@@ -82,7 +91,13 @@ def eye_aligned_face(
     bbox_xywh: Tuple[int, int, int, int],
     target_size: Tuple[int, int] = (224, 224),
 ) -> np.ndarray:
-    """Rotate + crop so that the eye-line is horizontal, then resize."""
+    """Rotate the frame so the eye line is horizontal, crop a padded face ROI, and return a resized aligned image.
+    Args:
+      frame_bgr: Original BGR frame.
+      landmarks: (468,2) array of pixel landmarks.
+      bbox_xywh: Bounding box around face (x,y,w,h).
+      target_size: (H,W) for output; square recommended for most models.
+    """
     x, y, w, h = bbox_xywh
     # Compute eye centers from FaceMesh landmarks (pixel coords)
     left_eye = landmarks[LEFT_EYE_IDX]
@@ -106,7 +121,7 @@ def eye_aligned_face(
         borderMode=cv2.BORDER_REFLECT,
     )
 
-    # Expand bbox a bit to capture chin/forehead after rotation
+    # Pad the box to include forehead/chin so alignment doesn’t crop too tightly.
     pad = int(0.2 * max(w, h))
     rx, ry = max(0, x - pad), max(0, y - pad)
     rw = min(rotated.shape[1] - rx, w + 2 * pad)
@@ -124,8 +139,8 @@ def detect_face_and_landmarks(
     frame_bgr: np.ndarray,
 ) -> Optional[Tuple[Tuple[int, int, int, int], np.ndarray]]:
     """
-    Returns (bbox_xywh, landmarks_xy) or None if not found.
-    Uses MediaPipe FaceMesh (single face).
+    Detect a single face and return (bbox_xywh, landmarks_xy) in pixel coordinates.
+    Returns None if no face is found.
     """
     h, w = frame_bgr.shape[:2]
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -167,6 +182,10 @@ def _clahe(
 def assess_quality(
     frame_bgr: np.ndarray, bbox_xywh: Tuple[int, int, int, int]
 ) -> FaceQuality:
+    """
+    Compute blur (variance of Laplacian) on a sharpened ROI, brightness on original ROI, and face box ratio.
+    Lower laptops often yield blur<20; thresholds below are intentionally lenient for in-class demos.
+    """
     h, w = frame_bgr.shape[:2]
     x, y, bw, bh = bbox_xywh
     face = frame_bgr[y : y + bh, x : x + bw]
@@ -224,8 +243,8 @@ def process_frame(
     return_metrics: bool = False,
 ) -> Any:
     """
-    Detects, quality-checks, aligns, saves face and logs metadata.
-    Returns saved filepath or None if rejected/not found.
+    Detect, quality-check, align, and save a single face frame.
+    If return_metrics=True, returns (path|None, FaceQuality). Otherwise returns path|None.
     """
     detection = detect_face_and_landmarks(frame_bgr)
     if detection is None:

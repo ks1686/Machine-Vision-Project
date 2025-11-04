@@ -1,7 +1,12 @@
 """
 face_registration.py
+--------------------
+Webcam capture loop for collecting face images from a user.
 
-Captures face images via webcam and stores them for later processing.
+Edit points for instructors/students:
+- CAMERA_INDEX: Default is 0; change if you have multiple cameras.
+- TARGET_COUNT: Default prompt is 10; set a fixed count or pass via CLI if you add argparse.
+- PREVIEW_TEXT: Overlay text size/position can be adjusted below.
 """
 
 import cv2
@@ -10,20 +15,21 @@ import time
 import uuid
 from face_processing import process_frame
 
-# Directory to save registered face images
-OUTPUT_DIR = "registered_faces"
+OUTPUT_DIR = "registered_faces"  # Base directory for saved face crops and metadata
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+CAMERA_INDEX = 0  # If the wrong camera opens, change this to 1 or 2.
 
 
 def capture_face_images(user_id: str, num_images: int = 10):
     """
-    Captures multiple face images for given user ID via webcam.
-    Args:
-        user_id (str): Unique identifier for the user.
-        num_images (int): Number of face images to capture.
+    Capture 'num_images' aligned face crops for the given user.
+    Saves files under registered_faces/<user_id> and appends metadata.csv in the parent directory.
     """
 
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(
+        CAMERA_INDEX
+    )  # Consider setting resolution: cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     if not cap.isOpened():
         print("Error: Could not open webcam.")
         return
@@ -31,10 +37,13 @@ def capture_face_images(user_id: str, num_images: int = 10):
     print(f"Starting face capture for user ID: {user_id}")
     print("Press 'q' to quit early.")
 
+    # Sanitize user_id for filesystem safety (spaces/colons etc.)
+    user_id = user_id.strip().replace(" ", "_")
     user_dir = os.path.join(OUTPUT_DIR, user_id)
     os.makedirs(user_dir, exist_ok=True)
 
     count = 0
+    num_images = max(1, int(num_images))  # Avoid invalid counts during testing
     while count < num_images:
         ret, frame = cap.read()
         if not ret:
@@ -101,10 +110,14 @@ def capture_face_images(user_id: str, num_images: int = 10):
     cv2.destroyAllWindows()
 
 
+# For a CLI version, consider using argparse to pass --user, --count, and threshold overrides.
 if __name__ == "__main__":
     print("Face Registration Module")
-    user_id_input = input("Enter User ID for face registration: ")
-    num_images_input = int(
-        input("Enter number of images to capture (default 10): ") or 10
-    )
+    user_id_input = input("Enter User ID for face registration: ").strip()
+    num_raw = input("Enter number of images to capture (default 10): ").strip()
+    try:
+        num_images_input = int(num_raw) if num_raw else 10
+    except ValueError:
+        print("Invalid number entered; defaulting to 10.")
+        num_images_input = 10
     capture_face_images(user_id_input, num_images_input)
