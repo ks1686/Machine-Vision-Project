@@ -3,7 +3,7 @@ face_processing.py
 ------------------
 Utilities for face detection, quality assessment, alignment, and saving.
 
-Tunable parameters:
+Editable parameters:
 - MIN_BLUR_VAR: laptop webcams often yield 5–20; raise for stricter blur checks.
 - BRIGHTNESS_RANGE: widen for dim rooms, tighten for controlled lighting.
 - MIN_BBOX_RATIO: face area / frame area; lower if users sit far from camera.
