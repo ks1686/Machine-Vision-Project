@@ -1,13 +1,22 @@
+# Python environments and bytecode
 .venv/
 __pycache__/
+
+# macOS metadata
 .DS_Store
-Proposal/proposal.synctex.gz
-Proposal/proposal.out
-Proposal/proposal.log
-Proposal/proposal.fdb_latexmk
-Proposal/proposal.aux
-Proposal/proposal.fls
-Proposal/proposal 2.log
-registered_faces/
-/.editorconfig
+
+# IDE settings
 /.idea/
+
+# LaTeX build artifacts (Proposal/)
+Proposal/proposal.aux
+Proposal/proposal.fdb_latexmk
+Proposal/proposal.fls
+Proposal/proposal.log
+Proposal/proposal.out
+Proposal/proposal.synctex.gz
+Proposal/proposal 2.log
+
+# Generated data directories
+registered_faces/
+/models/
