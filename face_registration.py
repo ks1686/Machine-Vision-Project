@@ -39,10 +39,10 @@ STEPS: list[tuple[str, float]] = [
 ]
 
 # Minimum time between automatic captures
-INTERVAL_SECONDS = 0.8
+INTERVAL_SECONDS = 0.5  # denser sampling for higher dataset resolution (without redundancy)
 
 # Repeat the entire sequence this many times
-ROUNDS = 1
+ROUNDS = 2  # two guided passes to improve variation without spamming near-duplicates
 
 
 def run_guided_continuous(
@@ -57,6 +57,10 @@ def run_guided_continuous(
     os.makedirs(user_dir, exist_ok=True)
 
     cap = cv2.VideoCapture(CAMERA_INDEX)
+    # Request higher input resolution and FPS (camera may clamp to supported values)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    cap.set(cv2.CAP_PROP_FPS, 30)
     if not cap.isOpened():
         print("Error: Could not open webcam.")
         return

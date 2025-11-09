@@ -27,7 +27,7 @@ import pandas as pd
 MIN_BLUR_VAR = 10.0  # variance of Laplacian on sharpened ROI
 MIN_BBOX_RATIO = 0.04  # min face area / frame area
 BRIGHTNESS_RANGE = (40, 235)
-OUTPUT_SIZE = (224, 224)  # (H, W)
+OUTPUT_SIZE = (512, 512)  # (H, W)  # higher-res aligned crops for better texture
 
 # MediaPipe indices for outer eye corners.
 LEFT_EYE_IDX = 33
@@ -44,7 +44,7 @@ def get_face_mesh():
         _FACE_MESH = mp_face_mesh.FaceMesh(
             static_image_mode=False,
             max_num_faces=1,
-            refine_landmarks=False,
+            refine_landmarks=True,
             min_detection_confidence=0.6,
             min_tracking_confidence=0.5,
         )
@@ -146,14 +146,14 @@ def eye_aligned_face(
         borderMode=cv2.BORDER_REFLECT,
     )
 
-    pad = int(0.2 * max(w, h))  # include forehead/chin
+    pad = int(0.3 * max(w, h))  # include more context (hair/ears/forehead/chin)
     rx, ry = max(0, x - pad), max(0, y - pad)
     rw = min(rotated.shape[1] - rx, w + 2 * pad)
     rh = min(rotated.shape[0] - ry, h + 2 * pad)
     crop = rotated[ry : ry + rh, rx : rx + rw]
 
     return cv2.resize(
-        crop, (target_size[1], target_size[0]), interpolation=cv2.INTER_AREA
+        crop, (target_size[1], target_size[0]), interpolation=cv2.INTER_LANCZOS4
     )
 
 
@@ -239,7 +239,7 @@ def process_frame(
     aligned = eye_aligned_face(frame_bgr, landmarks, bbox, OUTPUT_SIZE)
     os.makedirs(out_dir, exist_ok=True)
     fpath = os.path.join(out_dir, f"{base_name}.jpg")
-    cv2.imwrite(fpath, aligned, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    cv2.imwrite(fpath, aligned, [cv2.IMWRITE_JPEG_QUALITY, 98])
 
     h, w = frame_bgr.shape[:2]
     append_metadata(
@@ -260,4 +260,24 @@ def process_frame(
 
     if return_metrics:
         return fpath, q
+
     return fpath
+
+# ---------------------------------------------------------------------------
+# Public helper: facemesh_vector_from_aligned()
+# ---------------------------------------------------------------------------
+
+def facemesh_vector_from_aligned(img):
+    """Return a flattened (1404,) landmark vector from an aligned 224x224 or 512x512 face crop."""
+    import numpy as np
+    import cv2
+
+    h, w = img.shape[:2]
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    res = get_face_mesh().process(rgb)
+    if not getattr(res, "multi_face_landmarks", None):
+        return None
+
+    lm = res.multi_face_landmarks[0].landmark
+    pts = np.array([[p.x * w, p.y * h, p.z] for p in lm], dtype=np.float32)
+    return pts.flatten()
