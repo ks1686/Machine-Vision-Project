@@ -1,9 +1,11 @@
-# 3D Face Modeling Pipeline (MediaPipe + OpenCV)
+# 3D Face Modeling & Authentication Pipeline (MediaPipe + OpenCV)
 
 ## Overview
 
-This repository generates a full 3D textured model of a user's face using standard webcams.  
-It captures multiple angles, averages the results, and builds a textured 3D mesh for visualization or export.
+This repository implements face authentication using **only standard RGB webcams** - no specialized depth sensors required.  
+It generates a full 3D textured model of a user's face by capturing multiple angles, averaging the results, and building a textured 3D mesh. The system then authenticates users against their registered models using MediaPipe's 478-point facial landmark detection.
+
+**Key Feature**: Achieves face recognition and pose-aware authentication using commodity hardware (any RGB camera), demonstrating that specialized depth sensors like Apple's TrueDepth are not necessary for effective facial authentication.
 
 ---
 
@@ -76,7 +78,46 @@ python mesh_viewer.py <USER_ID> --file models/<USER_ID>_face.obj --no_flip
 
 ---
 
-## 6. File Summary
+## 6. Face Authentication
+
+Once a user is registered and their 3D model is created, you can authenticate them using the authentication system.
+
+### Authenticate a User
+
+Run the authentication script to capture a live image and compare it against registered models:
+
+```bash
+python authenticate.py
+```
+
+You'll be prompted to either:
+- Press Enter to compare against all registered users
+- Enter a specific User ID to verify against that user only
+
+**Authentication Process:**
+1. Position your face in the camera frame
+2. Press SPACE when ready (or 'q' to quit)
+3. The system captures and aligns your face
+4. Compares against registered model(s) using 478 facial landmarks
+5. Reports authentication result with confidence score
+
+**Security Features:**
+- **Pose Detection**: Tracks head rotation (yaw/pitch) and applies penalties for extreme angles
+- **Confidence Threshold**: Requires 78% minimum confidence for authentication
+- **Facial Landmark Comparison**: Uses MediaPipe's 478-point face mesh for detailed matching
+
+**Expected Results:**
+- Registered user (normal pose): 80-88% confidence ✅
+- Registered user (extreme angle >30°): Rejected ❌
+- Different person: <75% confidence (rejected) ❌
+
+**Output Files:**
+- `auth_images/auth_<userid>_<timestamp>.png` - Original capture
+- `auth_images/auth_<userid>_<timestamp>_aligned.png` - Aligned face image
+
+---
+
+## 7. File Summary
 
 | File                   | Description                                    |
 |------------------------|------------------------------------------------|
@@ -85,11 +126,11 @@ python mesh_viewer.py <USER_ID> --file models/<USER_ID>_face.obj --no_flip
 | `make_average_face.py` | Creates averaged face texture                  |
 | `mesh_textured.py`     | Generates 3D mesh with texture                 |
 | `mesh_viewer.py`       | Visualizes resulting mesh                      |
+| `authenticate.py`      | Live face authentication against registered models |
+| `compare_faces.py`     | Face comparison logic with pose detection      |
 
 ---
 
 ## Notes
 
-- This pipeline is **modeling-only**. Authentication logic (`enroll_geom.py`, `calibrate_geom.py`, `verify_geom.py`) is
-  handled separately.
 - The OBJ/MTL/PNG set can be imported into Blender, MeshLab, or any 3D engine for rendering or further processing.
