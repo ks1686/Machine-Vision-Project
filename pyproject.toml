@@ -1,0 +1,18 @@
+[project]
+name = "project"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "pandas",
+    "mediapipe",
+    "opencv-python",
+    "pycolmap",
+    "open3d",
+    "trimesh",
+    "imageio",
+    "torch",
+    "torchvision",
+    "depth-anything-v2"
+]

@@ -39,7 +39,9 @@ STEPS: list[tuple[str, float]] = [
 ]
 
 # Minimum time between automatic captures
-INTERVAL_SECONDS = 0.5  # denser sampling for higher dataset resolution (without redundancy)
+INTERVAL_SECONDS = (
+    0.5  # denser sampling for higher dataset resolution (without redundancy)
+)
 
 # Repeat the entire sequence this many times
 ROUNDS = 2  # two guided passes to improve variation without spamming near-duplicates
@@ -60,7 +62,7 @@ def run_guided_continuous(
 
     cap = cv2.VideoCapture(CAMERA_INDEX)
     # Request higher input resolution and FPS (camera may clamp to supported values)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
     cap.set(cv2.CAP_PROP_FPS, 30)
     # Try to reduce flicker/auto adjustments (may be ignored by some drivers/OS)
@@ -71,7 +73,7 @@ def run_guided_continuous(
     try:
         # OpenCV uses different ranges per backend; these may be ignored on macOS
         cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # manual mode on many backends
-        cap.set(cv2.CAP_PROP_EXPOSURE, -6)         # heuristic value
+        cap.set(cv2.CAP_PROP_EXPOSURE, -6)  # heuristic value
     except Exception:
         pass
     try:
