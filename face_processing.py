@@ -320,13 +320,21 @@ def facemesh_vector_from_aligned(img):
     """Return a flattened (1404,) landmark vector from an aligned 224/512/768 face crop (PNG/JPG)."""
     import numpy as np
     import cv2
-
+    
+    # Ensure good contrast for detection
     h, w = img.shape[:2]
-    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    res = get_face_mesh().process(rgb)
-    if not getattr(res, "multi_face_landmarks", None):
-        return None
-
-    lm = res.multi_face_landmarks[0].landmark
-    pts = np.array([[p.x * w, p.y * h, p.z] for p in lm], dtype=np.float32)
-    return pts.flatten()
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+    color = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    
+    # Try both original and contrast-enhanced images
+    for try_img in [img, color]:
+        rgb = cv2.cvtColor(try_img, cv2.COLOR_BGR2RGB)
+        res = get_face_mesh().process(rgb)
+        if getattr(res, "multi_face_landmarks", None):
+            lm = res.multi_face_landmarks[0].landmark
+            pts = np.array([[p.x * w, p.y * h, p.z] for p in lm], dtype=np.float32)
+            return pts.flatten()
+            
+    return None
