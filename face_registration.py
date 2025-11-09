@@ -55,12 +55,30 @@ def run_guided_continuous(
     safe_user = user_id.strip().replace(" ", "_")
     user_dir = os.path.join(OUTPUT_DIR, safe_user)
     os.makedirs(user_dir, exist_ok=True)
+    raw_dir = os.path.join(user_dir, "raw")
+    os.makedirs(raw_dir, exist_ok=True)
 
     cap = cv2.VideoCapture(CAMERA_INDEX)
     # Request higher input resolution and FPS (camera may clamp to supported values)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
     cap.set(cv2.CAP_PROP_FPS, 30)
+    # Try to reduce flicker/auto adjustments (may be ignored by some drivers/OS)
+    try:
+        cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+    except Exception:
+        pass
+    try:
+        # OpenCV uses different ranges per backend; these may be ignored on macOS
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # manual mode on many backends
+        cap.set(cv2.CAP_PROP_EXPOSURE, -6)         # heuristic value
+    except Exception:
+        pass
+    try:
+        cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+        cap.set(cv2.CAP_PROP_WB_TEMPERATURE, 4500)
+    except Exception:
+        pass
     if not cap.isOpened():
         print("Error: Could not open webcam.")
         return
@@ -152,9 +170,12 @@ def run_guided_continuous(
 
                     if saved_path:
                         total_saved += 1
+                        # Save the original frame for reconstruction (lossless)
+                        raw_path = os.path.join(raw_dir, f"{base}_raw.png")
+                        cv2.imwrite(raw_path, frame, [cv2.IMWRITE_PNG_COMPRESSION, 1])
                         cv2.putText(
                             frame,
-                            "Saved",
+                            "Saved (aligned+raw)",
                             (12, 132),
                             cv2.FONT_HERSHEY_SIMPLEX,
                             0.6,

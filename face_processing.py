@@ -8,6 +8,7 @@ Editable parameters:
 - BRIGHTNESS_RANGE: widen for dim rooms, tighten for controlled lighting.
 - MIN_BBOX_RATIO: face area / frame area; lower if users sit far from camera.
 - OUTPUT_SIZE: final aligned crop size (H, W).
+# NOTE: We also save the original raw frame and full warp metadata per accepted capture for 3D reconstruction.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import atexit
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple, cast
+from typing import Any, Optional, Tuple, Dict, cast
 
 import cv2
 from mediapipe.python.solutions import face_mesh as mp_face_mesh
@@ -127,23 +128,25 @@ def eye_aligned_face(
     landmarks: np.ndarray,
     bbox_xywh: Tuple[int, int, int, int],
     target_size: Tuple[int, int] = (224, 224),
-) -> np.ndarray:
-    """Rotate so the eye line is horizontal, crop a padded ROI, then resize."""
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Rotate so the eye line is horizontal, crop a padded ROI, then resize.
+    Returns (aligned_bgr, meta) where meta contains the full warp and ROI info.
+    """
     x, y, w, h = bbox_xywh
     left_eye = landmarks[LEFT_EYE_IDX]
     right_eye = landmarks[RIGHT_EYE_IDX]
     dy = right_eye[1] - left_eye[1]
     dx = right_eye[0] - left_eye[0]
-    angle = np.degrees(np.arctan2(dy, dx))
+    angle = float(np.degrees(np.arctan2(dy, dx)))
 
-    center = (x + w // 2, y + h // 2)
+    center = (int(x + w // 2), int(y + h // 2))
     M = cv2.getRotationMatrix2D(center, -angle, 1.0)
     rotated = cv2.warpAffine(
-        frame_bgr,
-        M,
-        (frame_bgr.shape[1], frame_bgr.shape[0]),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REFLECT,
+      frame_bgr,
+      M,
+      (frame_bgr.shape[1], frame_bgr.shape[0]),
+      flags=cv2.INTER_LINEAR,
+      borderMode=cv2.BORDER_REFLECT,
     )
 
     pad = int(0.3 * max(w, h))  # include more context (hair/ears/forehead/chin)
@@ -152,9 +155,26 @@ def eye_aligned_face(
     rh = min(rotated.shape[0] - ry, h + 2 * pad)
     crop = rotated[ry : ry + rh, rx : rx + rw]
 
-    return cv2.resize(
-        crop, (target_size[1], target_size[0]), interpolation=cv2.INTER_LANCZOS4
+    aligned = cv2.resize(
+      crop, (target_size[1], target_size[0]), interpolation=cv2.INTER_LANCZOS4
     )
+
+    meta: Dict[str, Any] = {
+      "angle_deg": angle,
+      "M": [float(M[0, 0]), float(M[0, 1]), float(M[0, 2]), float(M[1, 0]), float(M[1, 1]), float(M[1, 2])],
+      "roi_x": int(rx),
+      "roi_y": int(ry),
+      "roi_w": int(rw),
+      "roi_h": int(rh),
+      "pad_px": int(pad),
+      "target_h": int(target_size[0]),
+      "target_w": int(target_size[1]),
+      "left_eye_x": float(left_eye[0]),
+      "left_eye_y": float(left_eye[1]),
+      "right_eye_x": float(right_eye[0]),
+      "right_eye_y": float(right_eye[1]),
+    }
+    return aligned, meta
 
 
 def assess_quality(
@@ -196,6 +216,7 @@ def ensure_csv(path: str):
                 "timestamp",
                 "user_id",
                 "file",
+                "file_raw",
                 "blur_var",
                 "brightness",
                 "bbox_ratio",
@@ -203,6 +224,10 @@ def ensure_csv(path: str):
                 "frame_h",
                 "aligned_h",
                 "aligned_w",
+                "angle_deg",
+                "M00","M01","M02","M10","M11","M12",
+                "roi_x","roi_y","roi_w","roi_h","pad_px",
+                "left_eye_x","left_eye_y","right_eye_x","right_eye_y",
             ]
         ).to_csv(path, index=False)
 
@@ -236,10 +261,17 @@ def process_frame(
             return None, q
         return None
 
-    aligned = eye_aligned_face(frame_bgr, landmarks, bbox, OUTPUT_SIZE)
+    aligned, meta = eye_aligned_face(frame_bgr, landmarks, bbox, OUTPUT_SIZE)
     os.makedirs(out_dir, exist_ok=True)
-    fpath = os.path.join(out_dir, f"{base_name}.jpg")
-    cv2.imwrite(fpath, aligned, [cv2.IMWRITE_JPEG_QUALITY, 98])
+    raw_dir = os.path.join(out_dir, "raw")
+    os.makedirs(raw_dir, exist_ok=True)
+
+    fpath = os.path.join(out_dir, f"{base_name}.png")
+    fraw = os.path.join(raw_dir, f"{base_name}_raw.png")
+
+    # Save images losslessly
+    cv2.imwrite(fpath, aligned, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+    cv2.imwrite(fraw, frame_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 1])
 
     h, w = frame_bgr.shape[:2]
     append_metadata(
@@ -248,6 +280,7 @@ def process_frame(
             "timestamp": int(time.time()),
             "user_id": user_id,
             "file": os.path.relpath(fpath, os.path.dirname(out_dir)),
+            "file_raw": os.path.relpath(fraw, os.path.dirname(out_dir)),
             "blur_var": q.blur_var,
             "brightness": q.brightness,
             "bbox_ratio": q.bbox_ratio,
@@ -255,6 +288,22 @@ def process_frame(
             "frame_h": h,
             "aligned_h": OUTPUT_SIZE[0],
             "aligned_w": OUTPUT_SIZE[1],
+            "angle_deg": meta["angle_deg"],
+            "M00": meta["M"][0],
+            "M01": meta["M"][1],
+            "M02": meta["M"][2],
+            "M10": meta["M"][3],
+            "M11": meta["M"][4],
+            "M12": meta["M"][5],
+            "roi_x": meta["roi_x"],
+            "roi_y": meta["roi_y"],
+            "roi_w": meta["roi_w"],
+            "roi_h": meta["roi_h"],
+            "pad_px": meta["pad_px"],
+            "left_eye_x": meta["left_eye_x"],
+            "left_eye_y": meta["left_eye_y"],
+            "right_eye_x": meta["right_eye_x"],
+            "right_eye_y": meta["right_eye_y"],
         },
     )
 
@@ -268,7 +317,7 @@ def process_frame(
 # ---------------------------------------------------------------------------
 
 def facemesh_vector_from_aligned(img):
-    """Return a flattened (1404,) landmark vector from an aligned 224x224 or 512x512 face crop."""
+    """Return a flattened (1404,) landmark vector from an aligned 224/512/768 face crop (PNG/JPG)."""
     import numpy as np
     import cv2
 
