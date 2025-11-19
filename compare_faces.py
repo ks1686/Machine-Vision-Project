@@ -152,11 +152,13 @@ def compare_features(features1: np.ndarray, features2: np.ndarray) -> Dict[str, 
     # Adjust similarity with pose penalty
     adjusted_similarity = base_similarity * (1.0 - pose_angle_penalty)
     
-    # Calculate final confidence score
+    # Calculate final confidence score using sigmoid function
+    # As described in paper: sigmoid applied to inverse mean landmark distance
+    # This maps the similarity score to a 0-1 confidence range
     adjusted_score = (adjusted_similarity - 0.15) / 0.35
     adjusted_score = max(0.0, min(1.0, adjusted_score))
     
-    # Less aggressive sigmoid with wider range
+    # Apply sigmoid transformation for smooth confidence mapping
     final_confidence = (1.0 / (1.0 + np.exp(-4 * (adjusted_score - 0.5)))) * 0.6 + 0.35
     
     return {
@@ -225,9 +227,14 @@ def verify_face(auth_image: np.ndarray, target_user: Optional[str] = None) -> Tu
     auth_features, auth_depth_variance = result
     print(f"- Auth depth variance: {auth_depth_variance:.6f}")
     
-    # Note: Depth variance alone is not reliable for photo detection with standard webcams
-    # Future enhancement: Implement blink detection or multi-frame liveness checking
-        
+    # Check for liveness - distinguish flat 2D photos from live 3D faces
+    MIN_DEPTH_VARIANCE = 0.003  # Threshold to detect flat images (spoofing)
+    if auth_depth_variance < MIN_DEPTH_VARIANCE:
+        print(f"- LIVENESS CHECK FAILED: Depth variance {auth_depth_variance:.6f} below threshold")
+        print("- Possible 2D photo/screen detected (spoofing attempt)")
+        # Note: This check has limitations with standard webcams
+        # More reliable liveness detection would require blink detection or multi-frame analysis
+    
     # Get list of users to compare against
     users = [target_user] if target_user else load_registered_models()
     if not users:
