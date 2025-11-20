@@ -142,11 +142,11 @@ def eye_aligned_face(
     center = (int(x + w // 2), int(y + h // 2))
     M = cv2.getRotationMatrix2D(center, -angle, 1.0)
     rotated = cv2.warpAffine(
-      frame_bgr,
-      M,
-      (frame_bgr.shape[1], frame_bgr.shape[0]),
-      flags=cv2.INTER_LINEAR,
-      borderMode=cv2.BORDER_REFLECT,
+        frame_bgr,
+        M,
+        (frame_bgr.shape[1], frame_bgr.shape[0]),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REFLECT,
     )
 
     pad = int(0.3 * max(w, h))  # include more context (hair/ears/forehead/chin)
@@ -156,23 +156,30 @@ def eye_aligned_face(
     crop = rotated[ry : ry + rh, rx : rx + rw]
 
     aligned = cv2.resize(
-      crop, (target_size[1], target_size[0]), interpolation=cv2.INTER_LANCZOS4
+        crop, (target_size[1], target_size[0]), interpolation=cv2.INTER_LANCZOS4
     )
 
     meta: Dict[str, Any] = {
-      "angle_deg": angle,
-      "M": [float(M[0, 0]), float(M[0, 1]), float(M[0, 2]), float(M[1, 0]), float(M[1, 1]), float(M[1, 2])],
-      "roi_x": int(rx),
-      "roi_y": int(ry),
-      "roi_w": int(rw),
-      "roi_h": int(rh),
-      "pad_px": int(pad),
-      "target_h": int(target_size[0]),
-      "target_w": int(target_size[1]),
-      "left_eye_x": float(left_eye[0]),
-      "left_eye_y": float(left_eye[1]),
-      "right_eye_x": float(right_eye[0]),
-      "right_eye_y": float(right_eye[1]),
+        "angle_deg": angle,
+        "M": [
+            float(M[0, 0]),
+            float(M[0, 1]),
+            float(M[0, 2]),
+            float(M[1, 0]),
+            float(M[1, 1]),
+            float(M[1, 2]),
+        ],
+        "roi_x": int(rx),
+        "roi_y": int(ry),
+        "roi_w": int(rw),
+        "roi_h": int(rh),
+        "pad_px": int(pad),
+        "target_h": int(target_size[0]),
+        "target_w": int(target_size[1]),
+        "left_eye_x": float(left_eye[0]),
+        "left_eye_y": float(left_eye[1]),
+        "right_eye_x": float(right_eye[0]),
+        "right_eye_y": float(right_eye[1]),
     }
     return aligned, meta
 
@@ -225,9 +232,21 @@ def ensure_csv(path: str):
                 "aligned_h",
                 "aligned_w",
                 "angle_deg",
-                "M00","M01","M02","M10","M11","M12",
-                "roi_x","roi_y","roi_w","roi_h","pad_px",
-                "left_eye_x","left_eye_y","right_eye_x","right_eye_y",
+                "M00",
+                "M01",
+                "M02",
+                "M10",
+                "M11",
+                "M12",
+                "roi_x",
+                "roi_y",
+                "roi_w",
+                "roi_h",
+                "pad_px",
+                "left_eye_x",
+                "left_eye_y",
+                "right_eye_x",
+                "right_eye_y",
             ]
         ).to_csv(path, index=False)
 
@@ -312,22 +331,24 @@ def process_frame(
 
     return fpath
 
+
 # ---------------------------------------------------------------------------
 # Public helper: facemesh_vector_from_aligned()
 # ---------------------------------------------------------------------------
+
 
 def facemesh_vector_from_aligned(img):
     """Return a flattened (1404,) landmark vector from an aligned 224/512/768 face crop (PNG/JPG)."""
     import numpy as np
     import cv2
-    
+
     # Ensure good contrast for detection
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
     color = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-    
+
     # Try both original and contrast-enhanced images
     for try_img in [img, color]:
         rgb = cv2.cvtColor(try_img, cv2.COLOR_BGR2RGB)
@@ -336,5 +357,5 @@ def facemesh_vector_from_aligned(img):
             lm = res.multi_face_landmarks[0].landmark
             pts = np.array([[p.x * w, p.y * h, p.z] for p in lm], dtype=np.float32)
             return pts.flatten()
-            
+
     return None
