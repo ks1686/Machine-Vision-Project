@@ -1,7 +1,7 @@
 [project]
-name = "project"
+name = "machine-vision-project"
 version = "0.1.0"
-description = "Add your description here"
+description = "3D face modeling and webcam authentication with MediaPipe and OpenCV."
 requires-python = ">=3.12"
 dependencies = [
     "numpy",
@@ -9,21 +9,11 @@ dependencies = [
     "mediapipe",
     "opencv-python",
     "open3d",
-    "trimesh",
-    "imageio",
-    "torch",
-    "torchvision",
-    "transformers",
-    "accelerate",
-    "safetensors",
-    "torchmetrics",
-    "tqdm",
-    "huggingface-hub",
     "scipy",
-    "mediapipe",
     "matplotlib",
-    "scikit-image",
-    "scikit-learn",
-    "pyvista",
-    "scipy"
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
 ]

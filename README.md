@@ -11,11 +11,13 @@ It generates a full 3D textured model of a user's face by capturing multiple ang
 
 ## 1. Prerequisites
 
-Install dependencies:
+Install dependencies with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-pip install opencv-python mediapipe numpy pandas scipy open3d
+uv sync --group dev
 ```
+
+Then run scripts with `uv run python <script.py> ...`.
 
 Ensure your webcam is connected and functional.
 
@@ -26,8 +28,10 @@ Ensure your webcam is connected and functional.
 Use the guided registration tool to collect multiple aligned face captures:
 
 ```bash
-python face_registration.py <USER_ID>
+uv run python face_registration.py <USER_ID>
 ```
+
+If you omit `<USER_ID>`, the script prompts for one.
 
 Faces are stored in `registered_faces/<USER_ID>/` and automatically aligned using MediaPipe FaceMesh.
 
@@ -38,7 +42,7 @@ Faces are stored in `registered_faces/<USER_ID>/` and automatically aligned usin
 Generate an averaged texture image from all aligned captures:
 
 ```bash
-python make_average_face.py <USER_ID>
+uv run python make_average_face.py <USER_ID>
 ```
 
 Output:  
@@ -51,7 +55,7 @@ Output:
 Construct a 3D face mesh with the averaged texture mapped to it:
 
 ```bash
-python mesh_textured.py <USER_ID>
+uv run python mesh_textured.py <USER_ID>
 ```
 
 Outputs (in `models/`):
@@ -67,13 +71,13 @@ Outputs (in `models/`):
 Visualize the mesh interactively:
 
 ```bash
-python mesh_viewer.py <USER_ID> --file models/<USER_ID>_face.obj
+uv run python mesh_viewer.py <USER_ID> --file models/<USER_ID>_face.obj
 ```
 
 If the model appears flipped, you can disable the default 180° view rotation:
 
 ```bash
-python mesh_viewer.py <USER_ID> --file models/<USER_ID>_face.obj --no_flip
+uv run python mesh_viewer.py <USER_ID> --file models/<USER_ID>_face.obj --no_flip
 ```
 
 ---
@@ -87,12 +91,14 @@ Once a user is registered and their 3D model is created, you can authenticate th
 Run the authentication script to capture a live image and compare it against registered models:
 
 ```bash
-python authenticate.py
+uv run python authenticate.py [USER_ID]
 ```
 
 You'll be prompted to either:
 - Press Enter to compare against all registered users
 - Enter a specific User ID to verify against that user only
+
+Optional: pass the User ID as the first argument to skip the prompt.
 
 **Authentication Process:**
 1. Position your face in the camera frame
@@ -107,9 +113,11 @@ You'll be prompted to either:
 - **Facial Landmark Comparison**: Uses MediaPipe's 478-point face mesh for detailed matching
 
 **Expected Results:**
-- Registered user (normal pose): 80-88% confidence ✅
+- Registered user (normal pose): typically above the 78% threshold ✅
 - Registered user (extreme angle >30°): Rejected ❌
-- Different person: <75% confidence (rejected) ❌
+- Different person / failed liveness: 0% reported score (rejected) ❌
+
+Confidence is a linear map of landmark similarity into `[0, 1]`. Extreme pose (`>30°`) and low MediaPipe depth variance fail closed.
 
 **Output Files:**
 - `auth_images/auth_<userid>_<timestamp>.png` - Original capture
@@ -128,6 +136,9 @@ You'll be prompted to either:
 | `mesh_viewer.py`       | Visualizes resulting mesh                      |
 | `authenticate.py`      | Live face authentication against registered models |
 | `compare_faces.py`     | Face comparison logic with pose detection      |
+| `check_capture.py`     | Validates aligned/raw/metadata counts for a user |
+
+Run unit tests with `uv run pytest`.
 
 ---
 

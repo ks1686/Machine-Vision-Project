@@ -14,11 +14,13 @@ Editable parameters:
 from __future__ import annotations
 
 import os
+import sys
 import time
 import uuid
 
 import cv2
-from face_processing import process_frame
+
+from face_processing import process_frame, resolve_user_id
 
 # Output directory
 OUTPUT_DIR = "registered_faces"
@@ -57,8 +59,6 @@ def run_guided_continuous(
     safe_user = user_id.strip().replace(" ", "_")
     user_dir = os.path.join(OUTPUT_DIR, safe_user)
     os.makedirs(user_dir, exist_ok=True)
-    raw_dir = os.path.join(user_dir, "raw")
-    os.makedirs(raw_dir, exist_ok=True)
 
     cap = cv2.VideoCapture(CAMERA_INDEX)
     # Request higher input resolution and FPS (camera may clamp to supported values)
@@ -172,9 +172,6 @@ def run_guided_continuous(
 
                     if saved_path:
                         total_saved += 1
-                        # Save the original frame for reconstruction (lossless)
-                        raw_path = os.path.join(raw_dir, f"{base}_raw.png")
-                        cv2.imwrite(raw_path, frame, [cv2.IMWRITE_PNG_COMPRESSION, 1])
                         cv2.putText(
                             frame,
                             "Saved (aligned+raw)",
@@ -225,5 +222,8 @@ def run_guided_continuous(
 
 if __name__ == "__main__":
     print("FaceID-style Guided Continuous Registration")
-    user = input("Enter User ID: ").strip()
+    user = resolve_user_id(sys.argv)
+    if not user:
+        print("Error: User ID is required.")
+        raise SystemExit(1)
     run_guided_continuous(user)

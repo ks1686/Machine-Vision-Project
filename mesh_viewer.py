@@ -6,8 +6,9 @@
 
 from __future__ import annotations
 
-import os
 import argparse
+import os
+
 import numpy as np
 
 
@@ -25,9 +26,10 @@ def _pick_default_paths(user_id: str, models_dir: str):
 
 
 def _o3d_view(file_path: str, flip_view: bool):
-    import open3d as o3d
     import os
+
     import cv2
+    import open3d as o3d
 
     ext = os.path.splitext(file_path)[1].lower()
 
@@ -36,10 +38,8 @@ def _o3d_view(file_path: str, flip_view: bool):
         if not mesh.has_vertices() or (not mesh.has_triangles()):
             raise RuntimeError(f"OBJ has no geometry: {file_path}")
 
-        # If no texture got attached, try to load the sibling PNG manually.
         needs_tex = not (hasattr(mesh, "textures") and len(mesh.textures) > 0)
         if needs_tex:
-            # Our writer saves <user>_face_texture.png next to the OBJ
             tex_guess = os.path.join(
                 os.path.dirname(file_path),
                 os.path.basename(file_path).replace("_face.obj", "_face_texture.png"),
@@ -51,9 +51,7 @@ def _o3d_view(file_path: str, flip_view: bool):
                     mesh.textures = [o3d.geometry.Image(img)]
 
         if flip_view:
-            import numpy as _np
-
-            R = o3d.geometry.get_rotation_matrix_from_xyz((0.0, _np.pi, 0.0))
+            R = o3d.geometry.get_rotation_matrix_from_xyz((0.0, np.pi, 0.0))
             mesh.rotate(R, center=(0.0, 0.0, 0.0))
 
         if not mesh.has_vertex_normals():
@@ -63,6 +61,46 @@ def _o3d_view(file_path: str, flip_view: bool):
             [mesh], window_name=os.path.basename(file_path)
         )
         return
+
+    if ext == ".ply":
+        mesh = o3d.io.read_triangle_mesh(file_path)
+        if mesh.has_vertices() and mesh.has_triangles():
+            if flip_view:
+                R = o3d.geometry.get_rotation_matrix_from_xyz((0.0, np.pi, 0.0))
+                mesh.rotate(R, center=(0.0, 0.0, 0.0))
+            if not mesh.has_vertex_normals():
+                mesh.compute_vertex_normals()
+            o3d.visualization.draw_geometries(
+                [mesh], window_name=os.path.basename(file_path)
+            )
+            return
+        pcd = o3d.io.read_point_cloud(file_path)
+        if not pcd.has_points():
+            raise RuntimeError(f"PLY has no geometry: {file_path}")
+        if flip_view:
+            R = o3d.geometry.get_rotation_matrix_from_xyz((0.0, np.pi, 0.0))
+            pcd.rotate(R, center=(0.0, 0.0, 0.0))
+        o3d.visualization.draw_geometries(
+            [pcd], window_name=os.path.basename(file_path)
+        )
+        return
+
+    if ext == ".npy":
+        pts = np.load(file_path).astype(np.float32)
+        if pts.ndim != 2 or pts.shape[1] < 3:
+            raise RuntimeError(f"NPY is not an Nx3 point cloud: {file_path}")
+        if flip_view:
+            pts = pts.copy()
+            pts[:, 0] *= -1.0
+            pts[:, 2] *= -1.0
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pts[:, :3])
+        o3d.visualization.draw_geometries(
+            [pcd], window_name=os.path.basename(file_path)
+        )
+        return
+
+    raise RuntimeError(f"Unsupported file for Open3D viewer: {file_path}")
 
 
 # ---------------- Matplotlib fallback ----------------
@@ -108,11 +146,18 @@ def _mpl_view(file_path: str, flip_view: bool):
             V[:, 2] *= -1.0
         fig = plt.figure(figsize=(7, 6))
         ax = fig.add_subplot(111, projection="3d")
-        # draw wireframe triangles
-        for i, j, k in F:
-            tri = V[[i, j, k]]
-            tri = np.vstack([tri, tri[0]])
-            ax.plot(tri[:, 0], tri[:, 1], tri[:, 2])
+        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+        tris = V[F]
+        ax.add_collection3d(
+            Poly3DCollection(
+                tris, facecolors="#8ecae6", edgecolors="#023047", linewidths=0.2, alpha=0.9
+            )
+        )
+        mins, maxs = V.min(axis=0), V.max(axis=0)
+        ax.set_xlim(mins[0], maxs[0])
+        ax.set_ylim(mins[1], maxs[1])
+        ax.set_zlim(mins[2], maxs[2])
         ax.set_title(os.path.basename(file_path))
     elif ext == ".npy":
         pts = np.load(file_path).astype(np.float32)
@@ -160,10 +205,22 @@ def _mpl_view(file_path: str, flip_view: bool):
         fig = plt.figure(figsize=(6, 6))
         ax = fig.add_subplot(111, projection="3d")
         if faces:
-            for i, j, k in faces:
-                tri = V[[i, j, k]]
-                tri = np.vstack([tri, tri[0]])
-                ax.plot(tri[:, 0], tri[:, 1], tri[:, 2])
+            from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+            face_idx = np.asarray(faces, np.int32)
+            ax.add_collection3d(
+                Poly3DCollection(
+                    V[face_idx],
+                    facecolors="#8ecae6",
+                    edgecolors="#023047",
+                    linewidths=0.2,
+                    alpha=0.9,
+                )
+            )
+            mins, maxs = V.min(axis=0), V.max(axis=0)
+            ax.set_xlim(mins[0], maxs[0])
+            ax.set_ylim(mins[1], maxs[1])
+            ax.set_zlim(mins[2], maxs[2])
         else:
             ax.scatter(V[:, 0], V[:, 1], V[:, 2], s=3, depthshade=True)
         ax.set_title(os.path.basename(file_path))
