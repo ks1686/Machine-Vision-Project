@@ -20,3 +20,9 @@ Proposal/proposal 2.log
 # Generated data directories
 registered_faces/
 /models/
+auth_images/
+/metadata.csv
+
+# Tooling
+.cursor/
+.pytest_cache/
