@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "numpy",
     "pandas",
-    "mediapipe",
+    "mediapipe>=0.10.14,<0.10.30",
     "opencv-python",
     "open3d",
     "scipy",
