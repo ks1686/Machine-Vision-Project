@@ -138,7 +138,7 @@ Confidence is a linear map of landmark similarity into `[0, 1]`. Extreme pose (`
 | `compare_faces.py`     | Face comparison logic with pose detection      |
 | `check_capture.py`     | Validates aligned/raw/metadata counts for a user |
 
-Run unit tests with `uv run pytest`.
+Run unit tests with `uv run pytest`. GitHub Actions runs the same suite on every push and pull request (`.github/workflows/test.yml`).
 
 ---
 
