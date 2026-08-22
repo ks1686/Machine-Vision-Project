@@ -17,6 +17,10 @@ Install dependencies with [uv](https://docs.astral.sh/uv/):
 uv sync --group dev
 ```
 
+> **Python version:** use Python 3.12. MediaPipe's legacy FaceMesh API (used by
+> this pipeline) ships desktop wheels only up to CPython 3.12, so the project
+> pins `requires-python = ">=3.12,<3.13"`.
+
 Then run scripts with `uv run python <script.py> ...`.
 
 Ensure your webcam is connected and functional.
