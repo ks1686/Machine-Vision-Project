@@ -9,12 +9,22 @@ updates:
         patterns:
           - "*"
     ignore:
-      # MediaPipe 0.10.x hard-pins protobuf>=4.25.3,<5, so any protobuf 5.x/6.x
-      # bump cannot resolve (this is what kept failing the Dependabot job).
-      # Drop these ignores when mediapipe 1.x is adopted.
+      # Full evidence chain in docs/dependency-notes.md. Short version:
+      # protobuf >=5 is incompatible with this pipeline end to end:
+      #   1. MediaPipe 0.10.x declares protobuf>=4.25.3,<5, so >=5 cannot even
+      #      resolve alongside it.
+      #   2. Forcing protobuf 5.29.6 next to mediapipe 0.10.21 breaks at
+      #      runtime: CalculatorGraphConfig text-format parsing fails inside
+      #      FaceMesh init ("Expected identifier" on escaped bytes).
+      #   3. There is no safe 4.x: GHSA-7gcm-g887-7qv7 (CVE-2026-0994) is only
+      #      patched in 5.29.6+. The affected API (json_format.ParseDict) is
+      #      never used by this pipeline - see the dismissed Dependabot alert.
+      # Drop these ignores when the project migrates to MediaPipe 1.x /
+      # the Tasks API, which removes the legacy FaceMesh dependency stack.
       - dependency-name: "protobuf"
         versions: [">=5"]
-      # mediapipe 1.x removes the legacy FaceMesh API this pipeline uses
-      # (see commit 73ed944); minor bumps within 0.10.x stay allowed.
+      # mediapipe 1.x (and 0.10.30+) remove the legacy solutions FaceMesh API
+      # this pipeline uses everywhere; minor/major bumps are blocked until a
+      # deliberate Tasks-API port. Patch bumps within 0.10.x stay allowed.
       - dependency-name: "mediapipe"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
