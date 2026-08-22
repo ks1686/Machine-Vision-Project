@@ -200,7 +200,7 @@ def verify_face(
         return None, 0.0
 
     users = [target_user] if target_user else load_registered_models()
-    if not users or users == [None]:
+    if not users:
         return None, 0.0
 
     best_match = None
