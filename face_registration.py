@@ -92,6 +92,10 @@ def run_guided_continuous(
     print("Press 'q' to stop early. Press SPACE to force an immediate capture.")
 
     total_saved = 0
+    # Bail out if the camera stops delivering frames (unplugged, sleep, etc.)
+    # instead of spinning on an empty read forever.
+    MAX_CONSECUTIVE_READ_FAILURES = 30
+    failed_reads = 0
 
     for r in range(max(1, int(rounds))):
         for idx, (instruction, seconds) in enumerate(steps, start=1):
@@ -101,7 +105,18 @@ def run_guided_continuous(
             while True:
                 ret, frame = cap.read()
                 if not ret:
+                    failed_reads += 1
+                    if failed_reads >= MAX_CONSECUTIVE_READ_FAILURES:
+                        cap.release()
+                        cv2.destroyAllWindows()
+                        print(
+                            "Error: camera stopped returning frames "
+                            f"({failed_reads} consecutive failures). "
+                            f"Total saved: {total_saved}"
+                        )
+                        return
                     continue
+                failed_reads = 0
 
                 key = cv2.waitKey(1) & 0xFF
                 now = time.time()

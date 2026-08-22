@@ -137,7 +137,8 @@ def main(argv: list[str] | None = None) -> bool:
         if user_id:
             print(f"Could not verify identity as: {user_id}")
 
-    return matched_user is not None
+    # Wrong-identity matches count as failures so the exit code reflects them.
+    return matched_user is not None and (not user_id or matched_user == user_id)
 
 
 if __name__ == "__main__":

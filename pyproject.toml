@@ -2,7 +2,8 @@
 name = "machine-vision-project"
 version = "0.1.0"
 description = "3D face modeling and webcam authentication with MediaPipe and OpenCV."
-requires-python = ">=3.12"
+# MediaPipe 0.10.x ships desktop wheels only up to CPython 3.12.
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "numpy",
     "pandas",
