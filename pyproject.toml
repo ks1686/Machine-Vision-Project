@@ -5,12 +5,16 @@ description = "3D face modeling and webcam authentication with MediaPipe and Ope
 # MediaPipe 0.10.x ships desktop wheels only up to CPython 3.12.
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "numpy",
+    # MediaPipe 0.10.21 declares numpy<2. OpenCV 5 and SciPy 1.18 require
+    # numpy>=2, which makes the resolver silently pick MediaPipe 0.10.14
+    # (last 0.10.x without a numpy upper bound). Keep this floor until a
+    # Tasks-API port; see docs/dependency-notes.md.
+    "numpy>=1.26.4,<2",
     "pandas",
-    "mediapipe>=0.10.14,<0.10.30",
-    "opencv-python",
+    "mediapipe>=0.10.21,<0.10.30",
+    "opencv-python>=4.11,<5",
     "open3d",
-    "scipy",
+    "scipy>=1.17,<1.18",
     "matplotlib",
 ]
 
