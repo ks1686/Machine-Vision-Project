@@ -461,12 +461,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "matplotlib" },
-    { name = "mediapipe", specifier = ">=0.10.14,<0.10.30" },
-    { name = "numpy" },
+    { name = "mediapipe", specifier = ">=0.10.21,<0.10.30" },
+    { name = "numpy", specifier = ">=1.26.4,<2" },
     { name = "open3d" },
-    { name = "opencv-python" },
+    { name = "opencv-python", specifier = ">=4.11,<5" },
     { name = "pandas" },
-    { name = "scipy" },
+    { name = "scipy", specifier = ">=1.17,<1.18" },
 ]
 
 [package.metadata.requires-dev]

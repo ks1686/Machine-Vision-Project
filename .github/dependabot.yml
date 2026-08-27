@@ -28,3 +28,14 @@ updates:
       # deliberate Tasks-API port. Patch bumps within 0.10.x stay allowed.
       - dependency-name: "mediapipe"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # numpy 2 cannot resolve next to mediapipe 0.10.21 (Requires-Dist: numpy<2).
+      # A grouped uv bump to numpy 2 silently downgrades mediapipe to 0.10.14.
+      - dependency-name: "numpy"
+        update-types: ["version-update:semver-major"]
+      # opencv-python 5.x requires numpy>=2 on Python 3.9+, same trap.
+      - dependency-name: "opencv-python"
+        update-types: ["version-update:semver-major"]
+      # SciPy 1.18.0+ requires numpy>=2.0,<2.8. Stay on 1.17.x (numpy>=1.26.4,<2.7)
+      # until MediaPipe no longer pins numpy<2.
+      - dependency-name: "scipy"
+        versions: [">=1.18"]
