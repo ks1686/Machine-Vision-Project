@@ -11,7 +11,7 @@ dependencies = [
     # Tasks-API port; see docs/dependency-notes.md.
     "numpy>=1.26.4,<2",
     "pandas",
-    "mediapipe>=0.10.21,<0.10.30",
+    "mediapipe>=0.10.21,<0.10.36",
     "opencv-python>=4.11,<5",
     "open3d",
     "scipy>=1.17,<1.18",
