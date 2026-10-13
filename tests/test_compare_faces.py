@@ -96,7 +96,9 @@ def test_model_feature_cache_reads_image_once(monkeypatch, tmp_path: Path):
         return cached
 
     monkeypatch.setattr(compare_faces, "get_face_features", fake_features)
-    monkeypatch.setattr(compare_faces.cv2, "imread", lambda _p: np.zeros((4, 4, 3), np.uint8))
+    monkeypatch.setattr(
+        compare_faces.cv2, "imread", lambda _p: np.zeros((4, 4, 3), np.uint8)
+    )
     compare_faces.clear_feature_cache()
 
     first = compare_faces.get_cached_model_features("bob", str(img_path))

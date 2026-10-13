@@ -71,7 +71,9 @@ def test_process_frame_skips_metadata_when_disabled(tmp_path: Path, monkeypatch)
 
 
 def test_resolve_user_id_prefers_argv():
-    assert face_processing.resolve_user_id(["face_registration.py", "ks1686"]) == "ks1686"
+    assert (
+        face_processing.resolve_user_id(["face_registration.py", "ks1686"]) == "ks1686"
+    )
 
 
 def test_resolve_user_id_prompts_when_argv_missing():

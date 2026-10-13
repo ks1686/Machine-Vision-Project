@@ -8,10 +8,9 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
-import argparse
-from typing import List, Tuple, Optional
 
 import cv2
 import numpy as np
@@ -26,7 +25,7 @@ def _variance_of_laplacian(img_gray: np.ndarray) -> float:
     return float(cv2.Laplacian(img_gray, cv2.CV_64F).var())
 
 
-def _lm2d_from_img(img: np.ndarray) -> Optional[np.ndarray]:
+def _lm2d_from_img(img: np.ndarray) -> np.ndarray | None:
     vec = facemesh_vector_from_aligned(img)
     if vec is None:
         return None
@@ -39,8 +38,8 @@ def _lm2d_from_img(img: np.ndarray) -> Optional[np.ndarray]:
 
 
 def _align_to_reference(
-    img: np.ndarray, lm: np.ndarray, ref_lm: np.ndarray, out_size: Tuple[int, int]
-) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    img: np.ndarray, lm: np.ndarray, ref_lm: np.ndarray, out_size: tuple[int, int]
+) -> tuple[np.ndarray | None, np.ndarray | None]:
     if lm is None or ref_lm is None:
         return None, None
     M, _ = cv2.estimateAffinePartial2D(lm, ref_lm, method=cv2.LMEDS)
@@ -57,14 +56,12 @@ def _align_to_reference(
     return warped, M
 
 
-def _step_from_filename(fname: str) -> Optional[int]:
+def _step_from_filename(fname: str) -> int | None:
     m = re.search(r"_s(\d{2})_", os.path.basename(fname))
     return int(m.group(1)) if m else None
 
 
-def _collect_candidates(
-    user_id: str, base_dir: str, step: Optional[int]
-) -> pd.DataFrame:
+def _collect_candidates(user_id: str, base_dir: str, step: int | None) -> pd.DataFrame:
     meta_path = os.path.join(base_dir, "metadata.csv")
     user_dir = os.path.join(base_dir, user_id)
     if not os.path.exists(meta_path):
@@ -87,8 +84,8 @@ def _collect_candidates(
     return df[["abs_path", "blur_var", "step"]].rename(columns={"abs_path": "file"})
 
 
-def _load_images(paths: List[str]) -> np.ndarray:
-    imgs: List[np.ndarray] = []
+def _load_images(paths: list[str]) -> np.ndarray:
+    imgs: list[np.ndarray] = []
     H = W = None
     for p in paths:
         img = cv2.imread(p, cv2.IMREAD_COLOR)
@@ -149,7 +146,7 @@ def main():
     ref_lm = _lm2d_from_img(ref_img)
 
     # 3) Align all candidates, compute reprojection error, drop outliers
-    aligned: List[Tuple[np.ndarray, float]] = []
+    aligned: list[tuple[np.ndarray, float]] = []
     for p in use["file"].tolist():
         img = cv2.imread(p, cv2.IMREAD_COLOR)
         if img is None:

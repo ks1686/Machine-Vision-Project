@@ -49,6 +49,12 @@ jobs:
       - name: Install project
         run: uv sync --frozen --group dev
 
+      - name: Ruff lint
+        run: uv run --frozen ruff check --output-format=github .
+
+      - name: Ruff format check
+        run: uv run --frozen ruff format --check .
+
       - name: Compile sources
         run: uv run --frozen python -m compileall -q -x '(^|/)(\.venv|Proposal)/' .
 

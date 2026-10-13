@@ -13,6 +13,7 @@ Editable parameters:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import time
@@ -66,10 +67,8 @@ def run_guided_continuous(
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
     cap.set(cv2.CAP_PROP_FPS, 30)
     # Try to reduce flicker/auto adjustments (may be ignored by some drivers/OS)
-    try:
+    with contextlib.suppress(Exception):
         cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-    except Exception:
-        pass
     try:
         # OpenCV uses different ranges per backend; these may be ignored on macOS
         cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # manual mode on many backends

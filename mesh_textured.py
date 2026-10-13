@@ -6,13 +6,15 @@
 #   python mesh_textured.py ks1686 --base_dir registered_faces --models_dir models --tex_path registered_faces/ks1686/ks1686_avgface.png
 
 from __future__ import annotations
-import os
-import argparse
-import shutil
-import numpy as np
-import cv2
 
+import argparse
+import os
+import shutil
+
+import cv2
+import numpy as np
 from scipy.spatial import Delaunay
+
 from face_processing import facemesh_vector_from_aligned
 
 
@@ -50,7 +52,7 @@ def _normalize_vertices_for_view(pts_xyz: np.ndarray) -> np.ndarray:
     # Center XY around 0 (leave Z relative)
     V[:, 0:2] -= V[:, 0:2].mean(axis=0, keepdims=True)
     # Normalize XY scale by 95th percentile radius
-    r = np.sqrt((V[:, 0] ** 2 + V[:, 1] ** 2))
+    r = np.sqrt(V[:, 0] ** 2 + V[:, 1] ** 2)
     s = np.percentile(r, 95) + 1e-6
     V[:, 0:2] /= s
     # Z: standardize a bit so the mesh isn’t paper-thin
