@@ -367,10 +367,21 @@ def process_frame(
     os.makedirs(out_dir, exist_ok=True)
     fpath = os.path.join(out_dir, f"{base_name}.png")
     fraw = os.path.join(out_dir, "raw", f"{base_name}_raw.png")
-    cv2.imwrite(fpath, aligned, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+    # cv2.imwrite reports failure by returning False rather than raising.
+    if not cv2.imwrite(fpath, aligned, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
+        print(f"Error: failed to write {fpath}")
+        if return_metrics:
+            return None, quality
+        return None
     if write_raw:
         os.makedirs(os.path.dirname(fraw), exist_ok=True)
-        cv2.imwrite(fraw, frame_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+        if not cv2.imwrite(fraw, frame_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
+            print(f"Error: failed to write {fraw}")
+            with contextlib.suppress(OSError):
+                os.remove(fpath)
+            if return_metrics:
+                return None, quality
+            return None
 
     if write_metadata:
         h, w = frame_bgr.shape[:2]

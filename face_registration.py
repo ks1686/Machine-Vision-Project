@@ -122,10 +122,11 @@ def run_guided_continuous(
                 elapsed = now - start
                 remaining = max(0.0, seconds - elapsed)
 
-                # Overlay UI
+                # Overlay UI on a copy so the saved captures stay clean.
+                display = frame.copy()
                 header = f"Step {idx}/{len(steps)} (Round {r + 1})"
                 cv2.putText(
-                    frame,
+                    display,
                     header,
                     (12, 28),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -135,7 +136,7 @@ def run_guided_continuous(
                     cv2.LINE_AA,
                 )
                 cv2.putText(
-                    frame,
+                    display,
                     instruction,
                     (12, 54),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -145,7 +146,7 @@ def run_guided_continuous(
                     cv2.LINE_AA,
                 )
                 cv2.putText(
-                    frame,
+                    display,
                     f"remaining {remaining:0.1f}s",
                     (12, 80),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -155,7 +156,7 @@ def run_guided_continuous(
                     cv2.LINE_AA,
                 )
                 cv2.putText(
-                    frame,
+                    display,
                     f"total saved {total_saved}",
                     (12, 106),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -187,7 +188,7 @@ def run_guided_continuous(
                     if saved_path:
                         total_saved += 1
                         cv2.putText(
-                            frame,
+                            display,
                             "Saved (aligned+raw)",
                             (12, 132),
                             cv2.FONT_HERSHEY_SIMPLEX,
@@ -198,7 +199,7 @@ def run_guided_continuous(
                         )
                     elif q is not None:
                         cv2.putText(
-                            frame,
+                            display,
                             f"Rejected: {q.reasons}",
                             (12, 132),
                             cv2.FONT_HERSHEY_SIMPLEX,
@@ -209,7 +210,7 @@ def run_guided_continuous(
                         )
                     else:
                         cv2.putText(
-                            frame,
+                            display,
                             "No valid face",
                             (12, 132),
                             cv2.FONT_HERSHEY_SIMPLEX,
@@ -219,7 +220,7 @@ def run_guided_continuous(
                             cv2.LINE_AA,
                         )
 
-                cv2.imshow("Guided Continuous Capture", frame)
+                cv2.imshow("Guided Continuous Capture", display)
                 if key == ord("q"):
                     cap.release()
                     cv2.destroyAllWindows()
