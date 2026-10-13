@@ -69,7 +69,9 @@ def _collect_candidates(user_id: str, base_dir: str, step: int | None) -> pd.Dat
     if not os.path.isdir(user_dir):
         raise FileNotFoundError(f"user dir not found: {user_dir}")
 
-    df = pd.read_csv(meta_path)
+    # Read user_id as text: numeric IDs such as "1234" would otherwise parse as int
+    # and never match the CLI argument.
+    df = pd.read_csv(meta_path, dtype={"user_id": str})
     df = df[(df["user_id"] == user_id) & df["file"].notna()].copy()
     df["abs_path"] = df["file"].apply(lambda p: os.path.join(base_dir, p))
     df = df[df["abs_path"].apply(os.path.exists)].copy()
@@ -107,6 +109,33 @@ def _unsharp(x: np.ndarray, amount: float = 0.6, radius: int = 1) -> np.ndarray:
     blur = cv2.GaussianBlur(x8, (k, k), 0)
     y = cv2.addWeighted(x8, 1 + amount, blur, -amount, 0).astype(np.float32)
     return y
+
+
+def _keep_by_reprojection_error(
+    aligned: list[tuple[np.ndarray, float]],
+) -> list[tuple[np.ndarray, float]]:
+    """Drop alignment outliers using a MAD threshold on reprojection error.
+
+    Frames without a finite error (landmarks or alignment failed) are excluded.
+    Raises RuntimeError if none remain, instead of failing later in np.stack.
+    """
+    errs = np.array([e for _, e in aligned], dtype=np.float32)
+    finite = np.isfinite(errs)
+    items = [aligned[i] for i, ok in enumerate(finite) if ok]
+    if not items:
+        raise RuntimeError(
+            "No frames could be aligned to the reference face "
+            "(FaceMesh landmarks missing on the reference or all candidates)."
+        )
+    errs = errs[finite]
+    med = float(np.median(errs))
+    mad = float(np.median(np.abs(errs - med)) + 1e-6)
+    thr = med + 2.5 * (1.4826 * mad)
+    kept = [it for it in items if it[1] <= thr]
+    if len(kept) < max(6, int(0.5 * len(items))):
+        k = max(6, int(0.9 * len(items)))
+        kept = sorted(items, key=lambda t: t[1])[:k]
+    return kept
 
 
 # -------------------------- Main --------------------------
@@ -179,20 +208,8 @@ def main():
     if not aligned:
         raise RuntimeError("No frames survived alignment filtering.")
 
-    # adaptive keep via MAD
     if KEEP_ADAPTIVE:
-        errs = np.array([e for _, e in aligned], dtype=np.float32)
-        finite = np.isfinite(errs)
-        items = [aligned[i] for i, ok in enumerate(finite) if ok]
-        errs = errs[finite]
-        med = float(np.median(errs))
-        mad = float(np.median(np.abs(errs - med)) + 1e-6)
-        thr = med + 2.5 * (1.4826 * mad)
-        kept = [it for it in items if it[1] <= thr]
-        if len(kept) < max(6, int(0.5 * len(items))):
-            k = max(6, int(0.9 * len(items)))
-            kept = sorted(items, key=lambda t: t[1])[:k]
-        aligned = kept
+        aligned = _keep_by_reprojection_error(aligned)
 
     imgs = np.stack([a[0].astype(np.float32) for a in aligned], axis=0)
     K = imgs.shape[0]
