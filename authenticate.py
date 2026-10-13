@@ -91,9 +91,13 @@ def capture_auth_image(
 def main(argv: list[str] | None = None) -> bool:
     os.makedirs("auth_images", exist_ok=True)
     args = sys.argv if argv is None else argv
-    user_id = args[1].strip() if len(args) >= 2 else input(
-        "Enter User ID to authenticate (or press Enter to detect any user): "
-    ).strip()
+    user_id = (
+        args[1].strip()
+        if len(args) >= 2
+        else input(
+            "Enter User ID to authenticate (or press Enter to detect any user): "
+        ).strip()
+    )
 
     print("Starting authentication capture...")
     frame, success = capture_auth_image()

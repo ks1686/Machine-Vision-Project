@@ -26,3 +26,4 @@ auth_images/
 # Tooling
 .cursor/
 .pytest_cache/
+/.vscode/

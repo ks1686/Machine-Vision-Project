@@ -109,7 +109,7 @@ def _o3d_view(file_path: str, flip_view: bool):
 def _parse_obj_vertices_faces(path: str):
     v = []
     f = []
-    with open(path, "r") as fh:
+    with open(path) as fh:
         for line in fh:
             if not line or line.startswith("#"):
                 continue
@@ -151,7 +151,11 @@ def _mpl_view(file_path: str, flip_view: bool):
         tris = V[F]
         ax.add_collection3d(
             Poly3DCollection(
-                tris, facecolors="#8ecae6", edgecolors="#023047", linewidths=0.2, alpha=0.9
+                tris,
+                facecolors="#8ecae6",
+                edgecolors="#023047",
+                linewidths=0.2,
+                alpha=0.9,
             )
         )
         mins, maxs = V.min(axis=0), V.max(axis=0)
@@ -175,7 +179,7 @@ def _mpl_view(file_path: str, flip_view: bool):
         n_vertices = 0
         n_faces = 0
         header = True
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             for line in f:
                 if header:
                     if line.startswith("element vertex"):

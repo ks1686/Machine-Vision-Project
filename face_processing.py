@@ -14,6 +14,7 @@ Editable parameters:
 from __future__ import annotations
 
 import atexit
+import contextlib
 import os
 import time
 from collections.abc import Callable, Sequence
@@ -77,10 +78,8 @@ def _close_face_mesh():
     global _FACE_MESH_VIDEO, _FACE_MESH_STILL
     for mesh in (_FACE_MESH_VIDEO, _FACE_MESH_STILL):
         if mesh is not None:
-            try:
+            with contextlib.suppress(Exception):
                 mesh.close()
-            except Exception:
-                pass
     _FACE_MESH_VIDEO = None
     _FACE_MESH_STILL = None
 
