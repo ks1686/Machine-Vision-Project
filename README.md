@@ -1,151 +1,138 @@
-# 3D Face Modeling & Authentication Pipeline (MediaPipe + OpenCV)
+# 3D Face Modeling and Authentication (MediaPipe + OpenCV)
 
-## Overview
+[![Test](https://github.com/ks1686/Machine-Vision-Project/actions/workflows/test.yml/badge.svg)](https://github.com/ks1686/Machine-Vision-Project/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-This repository implements face authentication using **only standard RGB webcams** - no specialized depth sensors required.  
-It generates a full 3D textured model of a user's face by capturing multiple angles, averaging the results, and building a textured 3D mesh. The system then authenticates users against their registered models using MediaPipe's 478-point facial landmark detection.
+Graduate Machine Vision course project (Fall 2025): face modeling and verification with a standard RGB webcam, no depth sensor. A guided capture collects aligned face crops from several head poses, the sharpest frontal crops are averaged into one face texture, and MediaPipe FaceMesh landmarks turn that texture into a textured 3D mesh. Authentication captures one live frame and compares its 478 FaceMesh landmarks with each registered user's averaged face.
 
-**Key Feature**: Achieves face recognition and pose-aware authentication using commodity hardware (any RGB camera), demonstrating that specialized depth sensors like Apple's TrueDepth are not necessary for effective facial authentication.
+The project proposal is in [`Proposal/`](Proposal/).
 
----
+## Architecture
 
-## 1. Prerequisites
+```mermaid
+flowchart TD
+    CAM["Webcam"] --> REG["face_registration.py<br/>guided multi-pose capture"]
+    REG --> PROC["face_processing.py<br/>FaceMesh detect, quality gate, eye alignment"]
+    PROC --> STORE[("registered_faces/USER/<br/>aligned + raw PNGs, metadata.csv")]
+    STORE --> AVG["make_average_face.py<br/>top-K frontal, landmark alignment, robust mean or median"]
+    AVG --> AVGPNG[("USER_avgface.png")]
+    AVGPNG --> MESH["mesh_textured.py<br/>FaceMesh landmarks, Delaunay, UV texture"]
+    MESH --> MODELS[("models/USER_face.obj, .mtl, texture")]
+    MODELS --> VIEW["mesh_viewer.py<br/>Open3D or matplotlib"]
 
-Install dependencies with [uv](https://docs.astral.sh/uv/):
+    CAM --> AUTH["authenticate.py<br/>one-shot capture"]
+    AUTH --> PROC
+    AUTH --> CMP["compare_faces.py<br/>landmark similarity, pose gate, depth-variance gate"]
+    AVGPNG --> CMP
+    CMP --> VERDICT{"score >= 0.78?"}
+
+    SEC["secure_storage.py<br/>user ID validation, 0600/0700 permissions"] -.-> STORE
+    SEC -.-> AUTH
+```
+
+## Setup
+
+Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync --group dev
 ```
 
-> **Python version:** use Python 3.12. MediaPipe's legacy FaceMesh API (used by
-> this pipeline) ships desktop wheels only up to CPython 3.12, so the project
-> pins `requires-python = ">=3.12,<3.13"`.
+The pipeline uses MediaPipe's legacy FaceMesh solution API. It is pinned to MediaPipe 0.10.21 (`>=0.10.21,<0.10.30`), which also holds NumPy on 1.x, OpenCV on 4.x, SciPy on 1.17, and protobuf on 4.x. See [docs/dependency-notes.md](docs/dependency-notes.md) for the reasoning. On Linux, OpenCV and Open3D need system GL libraries (`libgl1`, `libegl1`, `libglib2.0-0`).
 
-Then run scripts with `uv run python <script.py> ...`.
+Run scripts with `uv run python <script.py> ...`.
 
-Ensure your webcam is connected and functional.
+## Usage
 
----
+User IDs may contain letters, digits, `_`, `-`, and `.` (not leading), up to 64 characters. Spaces become `_`. Anything else is rejected.
 
-## 2. Capture Faces
-
-Use the guided registration tool to collect multiple aligned face captures:
+### 1. Register (webcam)
 
 ```bash
 uv run python face_registration.py <USER_ID>
 ```
 
-If you omit `<USER_ID>`, the script prompts for one.
+Follow the on-screen prompts (straight, right, up, left, down, tilt right, tilt left; two rounds). Frames that pass the blur, brightness, and face-size checks are eye-aligned to 512x512 and saved to `registered_faces/<USER_ID>/`, with the raw frame in `raw/` and one row per capture in `registered_faces/metadata.csv`. Press SPACE to force a capture, `q` to stop.
 
-Faces are stored in `registered_faces/<USER_ID>/` and automatically aligned using MediaPipe FaceMesh.
+Validate a capture set:
 
----
+```bash
+uv run python check_capture.py <USER_ID>
+```
 
-## 3. Create Average Face
-
-Generate an averaged texture image from all aligned captures:
+### 2. Average face
 
 ```bash
 uv run python make_average_face.py <USER_ID>
 ```
 
-Output:  
-`registered_faces/<USER_ID>/<USER_ID>_avgface.png`
+Takes up to 24 of the sharpest straight-ahead captures, aligns them to the sharpest one with FaceMesh landmarks, drops rotation and reprojection outliers, and writes the sharper of a sigma-clipped mean and a median to `registered_faces/<USER_ID>/<USER_ID>_avgface.png`.
 
----
-
-## 4. Build Textured Mesh
-
-Construct a 3D face mesh with the averaged texture mapped to it:
+### 3. Textured mesh
 
 ```bash
 uv run python mesh_textured.py <USER_ID>
 ```
 
-Outputs (in `models/`):
+Writes `models/<USER_ID>_face.obj`, `.mtl`, and `_face_texture.png`. The OBJ opens in Blender, MeshLab, or any 3D tool.
 
-- `<USER_ID>_face.obj`
-- `<USER_ID>_face.mtl`
-- `<USER_ID>_face_texture.png`
-
----
-
-## 5. View the Model
-
-Visualize the mesh interactively:
+### 4. View
 
 ```bash
 uv run python mesh_viewer.py <USER_ID> --file models/<USER_ID>_face.obj
 ```
 
-If the model appears flipped, you can disable the default 180° view rotation:
+Add `--no_flip` if the model appears upside down.
 
-```bash
-uv run python mesh_viewer.py <USER_ID> --file models/<USER_ID>_face.obj --no_flip
-```
-
----
-
-## 6. Face Authentication
-
-Once a user is registered and their 3D model is created, you can authenticate them using the authentication system.
-
-### Authenticate a User
-
-Run the authentication script to capture a live image and compare it against registered models:
+### 5. Authenticate (webcam)
 
 ```bash
 uv run python authenticate.py [USER_ID]
 ```
 
-You'll be prompted to either:
-- Press Enter to compare against all registered users
-- Enter a specific User ID to verify against that user only
+With a user ID it verifies that identity; with none (press Enter at the prompt) it finds the best match among registered users. Press SPACE when the face box is green, `q` to quit. The exit verdict is a failure if no user reaches the threshold or if a different user than the requested one matches.
 
-Optional: pass the User ID as the first argument to skip the prompt.
+How the comparison works (`compare_faces.py`):
 
-**Authentication Process:**
-1. Position your face in the camera frame
-2. Press SPACE when ready (or 'q' to quit)
-3. The system captures and aligns your face
-4. Compares against registered model(s) using 478 facial landmarks
-5. Reports authentication result with confidence score
+- Landmarks are extracted from the aligned live frame and from each user's averaged face, centered, and scale-normalized.
+- Head pose (yaw, pitch) is estimated from the landmarks. A pose difference over 30 degrees scores 0; smaller differences reduce the score.
+- The score is a linear map of landmark similarity into `[0, 1]`. A match needs at least `0.78` (`MIN_CONFIDENCE`).
+- If the live frame's FaceMesh depth variance is below `0.003`, it is rejected as a possible flat photo.
 
-**Security Features:**
-- **Pose Detection**: Tracks head rotation (yaw/pitch) and applies penalties for extreme angles
-- **Confidence Threshold**: Requires 78% minimum confidence for authentication
-- **Facial Landmark Comparison**: Uses MediaPipe's 478-point face mesh for detailed matching
+Limitations: the depth values are MediaPipe's estimate from a single RGB frame, not measured depth, so the depth-variance gate is a heuristic and not a reliable anti-spoofing or liveness check. Matching uses landmark geometry only; the 3D mesh is a visualization output and is not used for authentication. The threshold has not been calibrated on a labeled dataset in this repository.
 
-**Expected Results:**
-- Registered user (normal pose): typically above the 78% threshold ✅
-- Registered user (extreme angle >30°): Rejected ❌
-- Different person / failed liveness: 0% reported score (rejected) ❌
+## Biometric data handling
 
-Confidence is a linear map of landmark similarity into `[0, 1]`. Extreme pose (`>30°`) and low MediaPipe depth variance fail closed.
+Everything stays local; nothing is uploaded.
 
-**Output Files:**
-- `auth_images/auth_<userid>_<timestamp>.png` - Original capture
-- `auth_images/auth_<userid>_<timestamp>_aligned.png` - Aligned face image
+- `registered_faces/`, `models/`, and `auth_images/` hold face images, landmark meshes, and capture metadata. They are listed in `.gitignore` and must never be committed.
+- On POSIX systems these files are written owner-only (`0600`) inside owner-only directories (`0700`).
+- Every authentication attempt saves the raw and aligned capture to `auth_images/`. Delete them when no longer needed.
+- To remove a user, delete `registered_faces/<USER_ID>/`, that user's rows in `registered_faces/metadata.csv`, and `models/<USER_ID>_face.*`.
 
----
+## Files
 
-## 7. File Summary
+| File | Purpose |
+| --- | --- |
+| `face_processing.py` | FaceMesh detection, quality checks, eye alignment, saving captures and metadata |
+| `secure_storage.py` | User ID validation and owner-only file and directory permissions |
+| `face_registration.py` | Guided multi-pose webcam capture |
+| `check_capture.py` | Verifies aligned, raw, and metadata counts and geometry for a user |
+| `make_average_face.py` | Builds the averaged face texture |
+| `mesh_textured.py` | Builds the textured OBJ mesh |
+| `mesh_viewer.py` | Views meshes and point clouds |
+| `authenticate.py` | One-shot capture and verification |
+| `compare_faces.py` | Feature extraction, pose estimation, scoring, model discovery |
 
-| File                   | Description                                    |
-|------------------------|------------------------------------------------|
-| `face_processing.py`   | Face detection, alignment, and quality filters |
-| `face_registration.py` | Guided webcam capture of multiple poses        |
-| `make_average_face.py` | Creates averaged face texture                  |
-| `mesh_textured.py`     | Generates 3D mesh with texture                 |
-| `mesh_viewer.py`       | Visualizes resulting mesh                      |
-| `authenticate.py`      | Live face authentication against registered models |
-| `compare_faces.py`     | Face comparison logic with pose detection      |
-| `check_capture.py`     | Validates aligned/raw/metadata counts for a user |
+## Development
 
-Run unit tests with `uv run pytest`. GitHub Actions runs the same suite on every push and pull request (`.github/workflows/test.yml`).
+```bash
+uv run pytest
+uv run ruff check . && uv run ruff format --check .
+```
 
----
+Tests use synthetic frames and landmarks and need no webcam. GitHub Actions runs ruff and pytest on every push and pull request (`.github/workflows/test.yml`).
 
-## Notes
+## License
 
-- The OBJ/MTL/PNG set can be imported into Blender, MeshLab, or any 3D engine for rendering or further processing.
+MIT. See [LICENSE](LICENSE).
