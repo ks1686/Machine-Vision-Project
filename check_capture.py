@@ -25,7 +25,7 @@ def main(user):
     print(f"Found {len(aligned)} aligned PNGs, {len(raw)} raw PNGs")
 
     # Metadata rows for this user
-    df = pd.read_csv(meta_path)
+    df = pd.read_csv(meta_path, dtype={"user_id": str})
     dfu = df[df["user_id"] == user].copy()
     print(f"Metadata rows for {user}: {len(dfu)}")
 
