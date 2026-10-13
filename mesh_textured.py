@@ -15,11 +15,16 @@ import cv2
 import numpy as np
 from scipy.spatial import Delaunay
 
-from face_processing import facemesh_vector_from_aligned
+from face_processing import (
+    facemesh_vector_from_aligned,
+    make_private_dir,
+    restrict_file,
+    validate_user_id,
+)
 
 
 def _ensure_dirs(path: str):
-    os.makedirs(path, exist_ok=True)
+    make_private_dir(path)
 
 
 def _load_texture(
@@ -106,7 +111,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="Create a textured face mesh (OBJ+MTL) from the averaged face image."
     )
-    ap.add_argument("user_id")
+    ap.add_argument("user_id", type=validate_user_id)
     ap.add_argument(
         "--base_dir",
         default="registered_faces",
@@ -153,6 +158,8 @@ def main():
         shutil.copyfile(tex_path, tex_copy)
 
     _write_obj_mtl(obj_path, mtl_path, os.path.basename(tex_copy), V, UV, F)
+    for path in (obj_path, mtl_path, tex_copy):
+        restrict_file(path)
 
     print("[mesh_textured] wrote:")
     print(f"  OBJ: {obj_path}")

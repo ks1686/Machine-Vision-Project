@@ -12,17 +12,25 @@ import os
 import cv2
 import numpy as np
 
-from face_processing import facemesh_vector_from_aligned
+from face_processing import facemesh_vector_from_aligned, validate_user_id
 
 MIN_CONFIDENCE = 0.78
 MIN_DEPTH_VARIANCE = 0.003
 MAX_POSE_DIFF_DEG = 30.0
-_FEATURE_CACHE: dict[str, tuple[np.ndarray, float]] = {}
+# Keyed by (path, mtime) so a re-generated avg face is never served stale.
+_FEATURE_CACHE: dict[tuple[str, float], tuple[np.ndarray, float]] = {}
 
 
 def clear_feature_cache() -> None:
     """Drop cached avg-face feature vectors (tests and re-enrollment)."""
     _FEATURE_CACHE.clear()
+
+
+def _is_valid_user_id(user_id: str) -> bool:
+    try:
+        return validate_user_id(user_id) == user_id
+    except ValueError:
+        return False
 
 
 def load_registered_models(
@@ -32,10 +40,14 @@ def load_registered_models(
     users: set[str] = set()
     if os.path.isdir(models_dir):
         for name in os.listdir(models_dir):
-            if name.endswith("_face.obj"):
+            if name.endswith("_face.obj") and _is_valid_user_id(
+                name[: -len("_face.obj")]
+            ):
                 users.add(name[: -len("_face.obj")])
     if os.path.isdir(faces_dir):
         for user_id in os.listdir(faces_dir):
+            if not _is_valid_user_id(user_id):
+                continue
             avg = os.path.join(faces_dir, user_id, f"{user_id}_avgface.png")
             if os.path.isfile(avg):
                 users.add(user_id)
@@ -107,11 +119,12 @@ def get_cached_model_features(
     user_id: str, img_path: str
 ) -> tuple[np.ndarray, float] | None:
     """Load and cache avg-face features for a registered user."""
-    cached = _FEATURE_CACHE.get(user_id)
-    if cached is not None:
-        return cached
     if not os.path.isfile(img_path):
         return None
+    key = (os.path.abspath(img_path), os.path.getmtime(img_path))
+    cached = _FEATURE_CACHE.get(key)
+    if cached is not None:
+        return cached
     model_img = cv2.imread(img_path)
     if model_img is None:
         print(f"- Failed to load averaged face for user {user_id}")
@@ -119,7 +132,7 @@ def get_cached_model_features(
     result = get_face_features(model_img)
     if result is None:
         return None
-    _FEATURE_CACHE[user_id] = result
+    _FEATURE_CACHE[key] = result
     return result
 
 
@@ -199,6 +212,9 @@ def verify_face(
         print("- Possible 2D photo/screen detected (spoofing attempt)")
         return None, 0.0
 
+    if target_user is not None and not _is_valid_user_id(target_user):
+        print(f"- Invalid user ID: {target_user!r}")
+        return None, 0.0
     users = [target_user] if target_user else load_registered_models()
     if not users:
         return None, 0.0

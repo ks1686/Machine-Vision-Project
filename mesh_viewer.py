@@ -11,6 +11,8 @@ import os
 
 import numpy as np
 
+from secure_storage import validate_user_id
+
 
 def _pick_default_paths(user_id: str, models_dir: str):
     # Prefer textured OBJ, then triangulated ply, then alpha ply, then points, then numpy
@@ -247,7 +249,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="View the 3D face model (OBJ mesh, triangulated PLY, point cloud, or NPY)."
     )
-    ap.add_argument("user_id")
+    ap.add_argument("user_id", type=validate_user_id)
     ap.add_argument("--models_dir", default="models")
     ap.add_argument("--file", default=None, help="Explicit .obj/.ply/.npy path to view")
     ap.add_argument(

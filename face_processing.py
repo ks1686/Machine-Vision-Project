@@ -26,6 +26,13 @@ import numpy as np
 import pandas as pd
 from mediapipe.python.solutions import face_mesh as mp_face_mesh
 
+from secure_storage import (  # noqa: F401 - re-exported for callers
+    make_private_dir,
+    restrict_file,
+    validate_user_id,
+    write_private_image,
+)
+
 # -------- Quality / alignment parameters (tune here as needed) --------
 MIN_BLUR_VAR = 10.0  # variance of Laplacian on sharpened ROI
 MIN_BBOX_RATIO = 0.04  # min face area / frame area
@@ -308,6 +315,7 @@ def ensure_csv(path: str):
 def append_metadata(csv_path: str, row: dict):
     ensure_csv(csv_path)
     pd.DataFrame([row]).to_csv(csv_path, mode="a", header=False, index=False)
+    restrict_file(csv_path)
 
 
 # ---- Public API ----
@@ -364,18 +372,18 @@ def process_frame(
             return None, quality
         return None
 
-    os.makedirs(out_dir, exist_ok=True)
+    make_private_dir(out_dir)
     fpath = os.path.join(out_dir, f"{base_name}.png")
     fraw = os.path.join(out_dir, "raw", f"{base_name}_raw.png")
     # cv2.imwrite reports failure by returning False rather than raising.
-    if not cv2.imwrite(fpath, aligned, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
+    if not write_private_image(fpath, aligned, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
         print(f"Error: failed to write {fpath}")
         if return_metrics:
             return None, quality
         return None
     if write_raw:
-        os.makedirs(os.path.dirname(fraw), exist_ok=True)
-        if not cv2.imwrite(fraw, frame_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
+        make_private_dir(os.path.dirname(fraw))
+        if not write_private_image(fraw, frame_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
             print(f"Error: failed to write {fraw}")
             with contextlib.suppress(OSError):
                 os.remove(fpath)

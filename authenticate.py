@@ -13,7 +13,14 @@ import cv2
 import numpy as np
 
 from compare_faces import verify_face
-from face_processing import align_face, assess_quality, detect_face_and_landmarks
+from face_processing import (
+    align_face,
+    assess_quality,
+    detect_face_and_landmarks,
+    make_private_dir,
+    validate_user_id,
+    write_private_image,
+)
 
 # Reuse same camera index as registration for consistency
 CAMERA_INDEX = 0
@@ -89,7 +96,6 @@ def capture_auth_image(
 
 
 def main(argv: list[str] | None = None) -> bool:
-    os.makedirs("auth_images", exist_ok=True)
     args = sys.argv if argv is None else argv
     user_id = (
         args[1].strip()
@@ -98,6 +104,12 @@ def main(argv: list[str] | None = None) -> bool:
             "Enter User ID to authenticate (or press Enter to detect any user): "
         ).strip()
     )
+    if user_id:
+        try:
+            user_id = validate_user_id(user_id)
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            return False
 
     print("Starting authentication capture...")
     frame, success = capture_auth_image()
@@ -117,10 +129,15 @@ def main(argv: list[str] | None = None) -> bool:
     auth_path = os.path.join("auth_images", f"auth_{label}_{timestamp}.png")
     aligned_path = os.path.join("auth_images", f"auth_{label}_{timestamp}_aligned.png")
 
-    cv2.imwrite(auth_path, frame)
-    cv2.imwrite(aligned_path, aligned_frame)
-    print(f"Authentication image saved to: {auth_path}")
-    print(f"Aligned image saved to: {aligned_path}")
+    # Auth captures are biometric data: keep them private to the current user.
+    make_private_dir("auth_images")
+    if write_private_image(auth_path, frame) and write_private_image(
+        aligned_path, aligned_frame
+    ):
+        print(f"Authentication image saved to: {auth_path}")
+        print(f"Aligned image saved to: {aligned_path}")
+    else:
+        print("Warning: could not save authentication images.")
 
     # Perform face verification using aligned image
     print("\nComparing face with registered models...")
