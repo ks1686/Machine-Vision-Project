@@ -16,7 +16,12 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from face_processing import facemesh_vector_from_aligned
+from face_processing import (
+    facemesh_vector_from_aligned,
+    make_private_dir,
+    validate_user_id,
+    write_private_image,
+)
 
 # -------------------------- Helpers --------------------------
 
@@ -145,7 +150,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Create a single averaged face for a user (median or mean chosen automatically)."
     )
-    parser.add_argument("user_id")
+    parser.add_argument("user_id", type=validate_user_id)
     parser.add_argument("--base_dir", default="registered_faces")
     args = parser.parse_args()
 
@@ -249,13 +254,14 @@ def main():
 
     # 7) Write one output
     out_dir = os.path.join(args.base_dir, args.user_id)
-    os.makedirs(out_dir, exist_ok=True)
+    make_private_dir(out_dir)
     out_path = os.path.join(out_dir, f"{args.user_id}_avgface.png")
-    cv2.imwrite(
+    if not write_private_image(
         out_path,
         np.clip(out_img, 0, 255).astype(np.uint8),
         [cv2.IMWRITE_PNG_COMPRESSION, 1],
-    )
+    ):
+        raise RuntimeError(f"Failed to write averaged face to {out_path}")
 
     method = "mean" if mean_score >= median_score else "median"
     print("[average] wrote:")

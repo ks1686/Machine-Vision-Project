@@ -6,6 +6,8 @@ import sys
 import cv2
 import pandas as pd
 
+from secure_storage import validate_user_id
+
 OUTPUT_SIZE = (512, 512)  # keep in sync with face_processing.py
 
 
@@ -105,4 +107,9 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python check_capture.py <user_id>")
         sys.exit(1)
-    main(sys.argv[1])
+    try:
+        user_id = validate_user_id(sys.argv[1])
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+    main(user_id)

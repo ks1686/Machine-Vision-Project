@@ -21,11 +21,15 @@ import uuid
 
 import cv2
 
-from face_processing import process_frame, resolve_user_id
+from face_processing import (
+    make_private_dir,
+    process_frame,
+    resolve_user_id,
+    validate_user_id,
+)
 
 # Output directory
 OUTPUT_DIR = "registered_faces"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Camera index (change if the wrong camera opens)
 CAMERA_INDEX = 0
@@ -57,9 +61,10 @@ def run_guided_continuous(
     rounds: int = ROUNDS,
 ) -> None:
     """Guide the user through STEPS and continuously capture aligned images throughout each step."""
-    safe_user = user_id.strip().replace(" ", "_")
+    safe_user = validate_user_id(user_id)
+    make_private_dir(OUTPUT_DIR)
     user_dir = os.path.join(OUTPUT_DIR, safe_user)
-    os.makedirs(user_dir, exist_ok=True)
+    make_private_dir(user_dir)
 
     cap = cv2.VideoCapture(CAMERA_INDEX)
     # Request higher input resolution and FPS (camera may clamp to supported values)
@@ -241,4 +246,9 @@ if __name__ == "__main__":
     if not user:
         print("Error: User ID is required.")
         raise SystemExit(1)
+    try:
+        user = validate_user_id(user)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        raise SystemExit(1) from exc
     run_guided_continuous(user)
