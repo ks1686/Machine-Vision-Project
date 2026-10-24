@@ -37,6 +37,10 @@ bumps (see `.github/dependabot.yml`). Revisit after a MediaPipe Tasks-API port.
    `refine_landmarks=True`). In 0.10.30+ the package ships only the Tasks API
    (`mediapipe.tasks`); `mediapipe.python.solutions` is gone entirely.
    Migrating is a deliberate port project, not a version bump.
+   0.10.21 is the last release before 0.10.30, so it is the only working
+   version. Dependabot sees 0.10.30+ as patch bumps (PR #22 tried 0.10.35 and
+   failed test collection with `No module named 'mediapipe.python'`), so
+   `.github/dependabot.yml` ignores mediapipe `>=0.10.30` by version.
 
 ## Why the risk is accepted
 

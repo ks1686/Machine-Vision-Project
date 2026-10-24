@@ -23,11 +23,12 @@ updates:
       # the Tasks API, which removes the legacy FaceMesh dependency stack.
       - dependency-name: "protobuf"
         versions: [">=5"]
-      # mediapipe 1.x (and 0.10.30+) remove the legacy solutions FaceMesh API
-      # this pipeline uses everywhere; minor/major bumps are blocked until a
-      # deliberate Tasks-API port. Patch bumps within 0.10.x stay allowed.
+      # mediapipe 0.10.30+ (and 1.x) remove the legacy solutions FaceMesh API
+      # this pipeline uses everywhere (ModuleNotFoundError: mediapipe.python).
+      # 0.10.30-0.10.35 are semver patch bumps, so an update-types rule does not
+      # catch them (PR #22). Block by version until a deliberate Tasks-API port.
       - dependency-name: "mediapipe"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+        versions: [">=0.10.30"]
       # numpy 2 cannot resolve next to mediapipe 0.10.21 (Requires-Dist: numpy<2).
       # A grouped uv bump to numpy 2 silently downgrades mediapipe to 0.10.14.
       - dependency-name: "numpy"
