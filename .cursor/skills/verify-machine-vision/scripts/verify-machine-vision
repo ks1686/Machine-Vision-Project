@@ -1,0 +1,506 @@
+#!/bin/bash
+# Verification harness for the machine vision CLIs.
+# Usage is listed in the skill document. This script does not source run.env.
+
+set -euo pipefail
+
+CLI_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1
+CLI_PATH="$CLI_DIR/$(basename -- "$0")"
+# shellcheck source=lib.sh
+. "$CLI_DIR/lib.sh"
+# shellcheck source=drive.sh
+. "$CLI_DIR/drive.sh"
+
+usage() {
+  cat <<'EOF'
+usage:
+  verify-machine-vision launch [--repo PATH]
+  verify-machine-vision doctor --id RUN_ID
+  verify-machine-vision drive --id RUN_ID FEATURE
+  verify-machine-vision run --id RUN_ID -- CMD...
+  verify-machine-vision cleanup --id RUN_ID
+  verify-machine-vision recover --id RUN_ID
+  verify-machine-vision evidence --id RUN_ID --name NAME
+  verify-machine-vision check-private PATH
+  verify-machine-vision check-id RUN_ID
+  verify-machine-vision hash --root PATH
+  verify-machine-vision snapshot --root PATH --dest PATH
+  verify-machine-vision compare PATH PATH
+  verify-machine-vision chmod-inside --id RUN_ID --path PATH
+EOF
+}
+
+fail_cleanup() {
+  local id="$1" code="${2:-1}"
+  printf 'cleanup incomplete; state kept\n' >&2
+  printf 'recovery: %s recover --id %s\n' "$CLI_PATH" "$id" >&2
+  exit "$code"
+}
+
+cmd_launch() {
+  local repo="$1" state evidence run_id saved_home
+  require_supported_platform || exit 1
+  if [ -z "$repo" ]; then
+    repo=$(git rev-parse --show-toplevel) || die "pass --repo"
+  fi
+  [ -d "$repo/.git" ] || [ -f "$repo/.git" ] || die "not a git checkout: $repo"
+  LAUNCH_READY=0
+  LAUNCH_STATE=
+  LAUNCH_EVIDENCE=
+  trap launch_abort EXIT
+  state=$(mktemp -d /tmp/vmvrun.XXXXXXXX) || die "mktemp failed"
+  LAUNCH_STATE=$state
+  evidence=$(mktemp -d /tmp/vmvevd.XXXXXXXX) || die "mktemp failed"
+  LAUNCH_EVIDENCE=$evidence
+  assert_private_or_drop "$state" || die "state directory is not private"
+  assert_private_or_drop "$evidence" || die "evidence directory is not private"
+  run_id=$(new_run_id) || die "could not mint a run id"
+  run_id=$(trim "$run_id") || die "could not mint a run id"
+  printf '%s\n' "$run_id" > "$state/run.id" || die "run id write failed"
+  printf '%s\n' "$run_id" > "$evidence/run.id" || die "run id write failed"
+  chmod 600 "$state/run.id" "$evidence/run.id" || die "run id mode failed"
+  mkdir -m 700 \
+    "$state/home" "$state/sandbox" "$state/bin" "$state/frames" \
+    "$state/runtime" "$state/scratch" "$state/cache" || die "mkdir failed"
+  HOME="$VMV_REAL_HOME" python3 "$GUARD" handlers-snapshot "$state/handlers.before" "$VMV_REAL_HOME" || die "handler snapshot failed"
+  copy_git_ls_files "$repo" "$state/sandbox" || die "sandbox copy failed"
+  bake_tool_cache "$state" "$VMV_REAL_HOME" || die "tool cache record failed"
+  bake_uv "$state" || die "uv wrapper failed"
+  RUN_ID=$run_id
+  STATUS=starting
+  FEATURE=
+  CREATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ) || die "date failed"
+  APP_PID=
+  APP_LSTART=
+  APP_COMMAND=
+  APP_UID=
+  write_run_env "$state/run.env" || die "run.env write failed"
+  saved_home=$HOME
+  prepare_project "$state" || die "project setup failed"
+  export HOME="$saved_home"
+  export PATH="$VMV_ORIGINAL_PATH"
+  maybe_compile_shim "$state" || die "camera shim compile failed"
+  STATUS=ready
+  write_run_env "$state/run.env" || die "run.env write failed"
+  LAUNCH_READY=1
+  trap - EXIT
+  printf 'run_id=%s\n' "$run_id"
+  printf 'state=%s\n' "$state"
+  printf 'evidence=%s\n' "$evidence"
+}
+
+launch_abort() {
+  local status=$?
+  trap - EXIT
+  if [ "${LAUNCH_READY:-0}" = 1 ]; then
+    exit "$status"
+  fi
+  if [ -n "${LAUNCH_STATE:-}" ] && our_scratch "$LAUNCH_STATE"; then
+    rm -rf -- "$LAUNCH_STATE"
+  fi
+  if [ -n "${LAUNCH_EVIDENCE:-}" ] && our_scratch "$LAUNCH_EVIDENCE"; then
+    rm -rf -- "$LAUNCH_EVIDENCE"
+  fi
+  exit "$status"
+}
+
+bake_uv() {
+  local state="$1" uv_bin quoted
+  command -v uv >/dev/null 2>&1 || return 0
+  uv_bin=$(command -v uv) || return 1
+  quoted=$(printf '%q' "$uv_bin") || return 1
+  printf '#!/bin/sh\nexec %s "$@"\n' "$quoted" > "$state/bin/uv" || return 1
+  chmod 700 "$state/bin/uv" || return 1
+}
+
+prepare_project() {
+  local state="$1" saved
+  if [ ! -f "$state/sandbox/pyproject.toml" ] || [ ! -f "$state/sandbox/uv.lock" ]; then
+    return 0
+  fi
+  [ -x "$state/bin/uv" ] || return 1
+  saved=$HOME
+  apply_isolated_env "$state" || return 1
+  (
+    cd "$state/sandbox" || exit 1
+    "$state/bin/uv" sync --frozen --group dev
+  ) || return 1
+  export HOME="$saved"
+  export PATH="${VMV_ORIGINAL_PATH:-$PATH}"
+}
+
+maybe_compile_shim() {
+  local state="$1" os
+  os=$(uname -s) || return 1
+  if [ "$os" != "Linux" ]; then
+    return 0
+  fi
+  if [ -e /dev/video0 ]; then
+    return 0
+  fi
+  command -v gcc >/dev/null 2>&1 || return 1
+  gcc -shared -fPIC -O2 -o "$state/bin/libfakevideo.so" "$LIB_DIR/fakevideo.c" -ldl || return 1
+}
+
+cmd_doctor() {
+  local id="$1" summary camera_line
+  valid_run_id "$id" || die "doctor requires an explicit run id"
+  locate_run "$id" || die "run not found"
+  load_run_env || die "run.env refused"
+  [ "$RUN_ID" = "$id" ] || die "run id mismatch"
+  python3 "$GUARD" private-dir "$RUN_STATE" >/dev/null || die "state is not private"
+  python3 "$GUARD" private-dir "$RUN_EVIDENCE" >/dev/null || die "evidence is not private"
+  [ -f "$RUN_STATE/handlers.before" ] || die "handler snapshot missing"
+  summary="$RUN_STATE/scratch/doctor.txt"
+  {
+    printf 'run_id=%s\n' "$id"
+    if [ -f "$RUN_STATE/sandbox/pyproject.toml" ]; then
+      printf 'app=present\n'
+    else
+      printf 'app=absent\n'
+    fi
+    if [ -e /dev/video0 ]; then
+      printf 'camera=device\n'
+    elif [ -f "$RUN_STATE/bin/libfakevideo.so" ]; then
+      printf 'camera=shim\n'
+    else
+      printf 'camera=absent\n'
+    fi
+    if [ -n "${DISPLAY:-}" ]; then
+      printf 'display=%s\n' "$DISPLAY"
+    else
+      printf 'display=absent\n'
+    fi
+    if command -v xdotool >/dev/null 2>&1; then
+      printf 'xdotool=present\n'
+    else
+      printf 'xdotool=absent\n'
+    fi
+    if command -v ffmpeg >/dev/null 2>&1; then
+      printf 'ffmpeg=present\n'
+    else
+      printf 'ffmpeg=absent\n'
+    fi
+  } > "$summary" || die "doctor note failed"
+  if [ -f "$RUN_STATE/sandbox/pyproject.toml" ]; then
+    [ -x "$RUN_STATE/bin/uv" ] || die "uv wrapper missing"
+    apply_isolated_env "$RUN_STATE" || die "isolated env failed"
+    (
+      cd "$RUN_STATE/sandbox" || exit 1
+      "$RUN_STATE/bin/uv" run --frozen --directory "$RUN_STATE/sandbox" python -c 'import cv2, mediapipe; print(cv2.__version__)'
+    ) > "$RUN_STATE/scratch/imports.txt" 2>&1 || die "import check failed"
+    printf 'imports=ok\n' >> "$summary"
+    if [ ! -e /dev/video0 ]; then
+      python3 - "$RUN_STATE/frames/probe.ppm" << 'PY' || die "probe frame failed"
+import sys
+width, height = 16, 16
+payload = bytes([255, 0, 0]) * (width * height)
+with open(sys.argv[1], "wb") as handle:
+    handle.write(f"P6\n{width} {height}\n255\n".encode())
+    handle.write(payload)
+PY
+      camera_on "$RUN_STATE/frames/probe.ppm" || die "camera shim missing"
+    fi
+    cat > "$RUN_STATE/scratch/probe.py" << 'PY' || die "probe script failed"
+import cv2
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    raise SystemExit(1)
+ok, frame = cap.read()
+cap.release()
+if not ok or frame is None or frame.ndim != 3 or frame.shape[0] < 1 or frame.shape[1] < 1:
+    raise SystemExit(1)
+print("shape={0}".format(tuple(int(v) for v in frame.shape)))
+PY
+    apply_isolated_env "$RUN_STATE" || die "isolated env failed"
+    camera_line=$(
+      cd "$RUN_STATE/sandbox" || exit 1
+      "$RUN_STATE/bin/uv" run --frozen --directory "$RUN_STATE/sandbox" python -u "$RUN_STATE/scratch/probe.py"
+    ) || die "camera probe failed"
+    camera_off
+    printf '%s\n' "$camera_line" >> "$summary" || die "doctor note failed"
+  fi
+  if [ ! -f "$RUN_EVIDENCE/doctor.txt" ]; then
+    publish_file "doctor.txt" "$summary" || die "evidence write failed"
+  fi
+  cat "$summary"
+  printf 'doctor: ok\n'
+}
+
+cmd_drive() {
+  local id="$1" feature="$2"
+  valid_run_id "$id" || die "drive requires an explicit run id"
+  locate_run "$id" || die "run not found"
+  load_run_env || die "run.env refused"
+  [ "$RUN_ID" = "$id" ] || die "run id mismatch"
+  FEATURE=$feature
+  STATUS=driving
+  write_run_env "$RUN_STATE/run.env" || die "run.env write failed"
+  local status=0
+  drive_feature "$feature" && status=0 || status=$?
+  load_run_env || exit "$status"
+  FEATURE=$feature
+  if [ "$status" -eq 0 ]; then
+    STATUS=ready
+  else
+    STATUS=failed
+  fi
+  write_run_env "$RUN_STATE/run.env" || exit "$status"
+  exit "$status"
+}
+
+cmd_run() {
+  local id="$1" guard_status status
+  shift
+  valid_run_id "$id" || die "run requires an explicit run id"
+  locate_run "$id" || die "run not found"
+  parse_run_env "$RUN_STATE/run.env" || die "run.env refused"
+  [ "$RUN_ID" = "$id" ] || die "run id mismatch"
+  [ "$#" -gt 0 ] || die "run requires a command"
+  set +e
+  guard_side_effects "$RUN_STATE/side-effects.log" "$@"
+  guard_status=$?
+  set -e
+  if [ "$guard_status" -ne 0 ]; then
+    exit "$guard_status"
+  fi
+  apply_isolated_env "$RUN_STATE" || exit 1
+  set +e
+  ( cd "$RUN_STATE/sandbox" && "$@" )
+  status=$?
+  set -e
+  exit "$status"
+}
+
+cmd_cleanup() {
+  local id="$1" cmp_status
+  if ! valid_run_id "$id"; then
+    fail_cleanup "${id:-missing}"
+  fi
+  if ! locate_run "$id"; then
+    fail_cleanup "$id"
+  fi
+  if ! load_run_env; then
+    fail_cleanup "$id"
+  fi
+  if [ "$RUN_ID" != "$id" ]; then
+    fail_cleanup "$id"
+  fi
+  HOME="$VMV_REAL_HOME" python3 "$GUARD" handlers-snapshot "$RUN_STATE/handlers.after" "$VMV_REAL_HOME" > "$RUN_STATE/scratch/handlers.err" 2>&1 || fail_cleanup "$id"
+  set +e
+  python3 "$GUARD" compare "$RUN_STATE/handlers.before" "$RUN_STATE/handlers.after" > "$RUN_STATE/scratch/handlers.cmp"
+  cmp_status=$?
+  set -e
+  if [ "$cmp_status" -ne 0 ]; then
+    fail_cleanup "$id" "$cmp_status"
+  fi
+  if ! grep -F -x -q -- "unchanged" "$RUN_STATE/scratch/handlers.cmp"; then
+    fail_cleanup "$id"
+  fi
+  if [ -n "${APP_PID:-}" ]; then
+    if ! stop_recorded_process "$APP_PID" "$APP_LSTART" "$APP_COMMAND" "$APP_UID"; then
+      fail_cleanup "$id"
+    fi
+  fi
+  python3 "$GUARD" chmod-inside "$RUN_STATE" "$RUN_STATE" >/dev/null || fail_cleanup "$id"
+  rm -rf -- "$RUN_STATE"
+  if [ -d "$RUN_STATE" ]; then
+    fail_cleanup "$id"
+  fi
+  printf 'cleaned\n'
+  printf 'evidence=%s\n' "$RUN_EVIDENCE"
+}
+
+cmd_recover() {
+  local id="$1" state evidence
+  valid_run_id "$id" || die "recover requires an explicit run id"
+  state=$(python3 "$GUARD" find-run "vmvrun." "$id" 2>/dev/null) || state=
+  evidence=$(python3 "$GUARD" find-run "vmvevd." "$id" 2>/dev/null) || evidence=
+  if [ -z "$state" ] && [ -z "$evidence" ]; then
+    die "no run $id"
+  fi
+  if [ -n "$state" ]; then
+    printf 'state=%s\n' "$state"
+    printf 'manual removal keeps the evidence directory:\n'
+    printf 'rm -rf %s\n' "$state"
+  else
+    printf 'state=absent\n'
+  fi
+  if [ -n "$evidence" ]; then
+    printf 'evidence=%s\n' "$evidence"
+  fi
+}
+
+cmd_evidence() {
+  local id="$1" name="$2"
+  valid_run_id "$id" || die "evidence requires an explicit run id"
+  locate_run "$id" || die "run not found"
+  publish_file "$name" /dev/stdin || die "evidence write refused"
+}
+
+need_opt() {
+  [ "$#" -ge 2 ] || die "missing $1"
+}
+
+main() {
+  local cmd="${1:-}"
+  if [ -z "$cmd" ]; then
+    usage >&2
+    exit 1
+  fi
+  shift
+  case "$cmd" in
+    launch)
+      local repo=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --repo)
+            [ "$#" -ge 2 ] || die "missing --repo"
+            repo=$2
+            shift 2
+            ;;
+          *) die "unknown argument: $1" ;;
+        esac
+      done
+      cmd_launch "$repo"
+      ;;
+    doctor)
+      local id=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --id) [ "$#" -ge 2 ] || die "missing --id"; id=$2; shift 2 ;;
+          *) die "unknown argument: $1" ;;
+        esac
+      done
+      [ -n "$id" ] || die "doctor requires --id"
+      cmd_doctor "$id"
+      ;;
+    drive)
+      local id="" feature=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --id) [ "$#" -ge 2 ] || die "missing --id"; id=$2; shift 2 ;;
+          *)
+            [ -z "$feature" ] || die "unknown argument: $1"
+            feature=$1
+            shift
+            ;;
+        esac
+      done
+      [ -n "$id" ] || die "drive requires --id"
+      [ -n "$feature" ] || die "drive requires a feature"
+      cmd_drive "$id" "$feature"
+      ;;
+    run)
+      local id=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --id) [ "$#" -ge 2 ] || die "missing --id"; id=$2; shift 2 ;;
+          --) shift; break ;;
+          *) die "unknown argument: $1" ;;
+        esac
+      done
+      [ -n "$id" ] || die "run requires --id"
+      cmd_run "$id" "$@"
+      ;;
+    cleanup)
+      local id=""
+      if [ "$#" -eq 0 ]; then
+        printf 'error: cleanup requires an explicit run id\n' >&2
+        exit 1
+      fi
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --id) [ "$#" -ge 2 ] || die "missing --id"; id=$2; shift 2 ;;
+          *) die "unknown argument: $1" ;;
+        esac
+      done
+      [ -n "$id" ] || {
+        printf 'error: cleanup requires an explicit run id\n' >&2
+        exit 1
+      }
+      cmd_cleanup "$id"
+      ;;
+    recover)
+      local id=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --id) [ "$#" -ge 2 ] || die "missing --id"; id=$2; shift 2 ;;
+          *) die "unknown argument: $1" ;;
+        esac
+      done
+      [ -n "$id" ] || die "recover requires --id"
+      cmd_recover "$id"
+      ;;
+    evidence)
+      local id="" name=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --id) [ "$#" -ge 2 ] || die "missing --id"; id=$2; shift 2 ;;
+          --name) [ "$#" -ge 2 ] || die "missing --name"; name=$2; shift 2 ;;
+          *) die "unknown argument: $1" ;;
+        esac
+      done
+      [ -n "$id" ] || die "evidence requires --id"
+      [ -n "$name" ] || die "evidence requires --name"
+      cmd_evidence "$id" "$name"
+      ;;
+    check-private)
+      [ "$#" -eq 1 ] || die "check-private requires one path"
+      python3 "$GUARD" private-dir "$1"
+      ;;
+    check-id)
+      [ "$#" -eq 1 ] || die "check-id requires one id"
+      valid_run_id "$1"
+      ;;
+    hash)
+      local root=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --root) [ "$#" -ge 2 ] || die "missing --root"; root=$2; shift 2 ;;
+          *) die "unknown argument: $1" ;;
+        esac
+      done
+      [ -n "$root" ] || die "hash requires --root"
+      python3 "$GUARD" hash-tree "$root"
+      ;;
+    snapshot)
+      local root="" dest=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --root) [ "$#" -ge 2 ] || die "missing --root"; root=$2; shift 2 ;;
+          --dest) [ "$#" -ge 2 ] || die "missing --dest"; dest=$2; shift 2 ;;
+          *) die "unknown argument: $1" ;;
+        esac
+      done
+      [ -n "$root" ] || die "snapshot requires --root"
+      [ -n "$dest" ] || die "snapshot requires --dest"
+      python3 "$GUARD" snapshot-tree "$root" "$dest"
+      ;;
+    compare)
+      [ "$#" -eq 2 ] || die "compare requires two files"
+      python3 "$GUARD" compare "$1" "$2"
+      ;;
+    chmod-inside)
+      local id="" path=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --id) [ "$#" -ge 2 ] || die "missing --id"; id=$2; shift 2 ;;
+          --path) [ "$#" -ge 2 ] || die "missing --path"; path=$2; shift 2 ;;
+          *) die "unknown argument: $1" ;;
+        esac
+      done
+      [ -n "$id" ] || die "chmod-inside requires --id"
+      [ -n "$path" ] || die "chmod-inside requires --path"
+      valid_run_id "$id" || die "refusing run id"
+      locate_run "$id" || die "run not found"
+      python3 "$GUARD" chmod-inside "$RUN_STATE" "$path"
+      ;;
+    *)
+      usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
