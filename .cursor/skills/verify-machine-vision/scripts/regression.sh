@@ -15,6 +15,14 @@ SKILL_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd) || exit 1
 REAL_PATH=${PATH:-}
 REAL_HOME=${HOME:-}
 REAL_PS=$(command -v ps) || exit 1
+REAL_UNAME=$(uname -s) || exit 1
+case "$REAL_UNAME" in
+  Linux|Darwin) ;;
+  *)
+    printf 'fail: unsupported regression host: %s\n' "$REAL_UNAME" >&2
+    exit 1
+    ;;
+esac
 cd / || exit 1
 
 REGRESS=$(mktemp -d /tmp/vmv-regress.XXXXXXXX) || exit 1
@@ -576,6 +584,7 @@ test_git_copy_and_isolation() {
   [ "$CAP_OUT" = "off" ] || fail "GOTELEMETRY was $CAP_OUT"
   home="$REGRESS/real-home"
   mkdir -p "$home/Library/Preferences" || return 1
+  chmod 700 "$home" || return 1
   prefs="$home/Library/Preferences/com.vmv.test.plist"
   printf 'original\n' > "$prefs" || return 1
   before=$(python3 "$GUARD" hash-tree "$home") || return 1
@@ -640,7 +649,11 @@ test_watch_chmod_handlers() {
   snap3="$REGRESS/h3"
   VMV_PLATFORM=Darwin python3 "$GUARD" handlers-snapshot "$snap1" "$home" || return 1
   grep -F -q "$pref" "$snap1" || fail "handler snapshot did not record the full path"
+  printf 'finder\n' > "$home/Library/Preferences/.DS_Store" || return 1
   VMV_PLATFORM=Darwin python3 "$GUARD" handlers-snapshot "$snap2" "$home" || return 1
+  if grep -F -q ".DS_Store" "$snap2"; then
+    fail "handler snapshot recorded .DS_Store"
+  fi
   capture python3 "$GUARD" compare "$snap1" "$snap2"
   [ "$CAP_STATUS" -eq 0 ] || fail "handler compare failed"
   case "$CAP_OUT" in
@@ -735,6 +748,356 @@ PY
   fi
 }
 
+test_cleanup_retry_and_recover() {
+  local dest lstart cmd uid
+  dest="$REGRESS/state-note"
+  printf 'v1\n' | python3 "$GUARD" write-replace "$dest" || return 1
+  printf 'v2\n' | python3 "$GUARD" write-replace "$dest" || fail "replace refused an existing state file"
+  [ "$(cat "$dest")" = "v2" ] || fail "replace did not overwrite"
+  ln -s "$dest" "$REGRESS/state-link" || return 1
+  capture bash -c 'printf v3 | python3 "$1" write-replace "$2"' bash "$GUARD" "$REGRESS/state-link"
+  [ "$CAP_STATUS" -ne 0 ] || fail "replace followed a symlink"
+  [ "$(cat "$dest")" = "v2" ] || fail "symlink replace changed the target"
+  do_launch || return 1
+  capture "$CLI" cleanup --id "$LAST_ID" --discard
+  [ "$CAP_STATUS" -ne 0 ] || fail "cleanup accepted --discard"
+  [ -d "$LAST_STATE" ] || fail "unknown flag removed state"
+  case "$CAP_OUT" in
+    *unknown\ argument*) ;;
+    *) fail "unknown flag output: $CAP_OUT" ;;
+  esac
+  spawn_setsid sleep 40 || return 1
+  note_spawn || return 1
+  lstart=$(ps_lstart "$SPAWN_PID") || return 1
+  cmd=$(ps_command "$SPAWN_PID") || return 1
+  uid=$(ps_uid "$SPAWN_PID") || return 1
+  RUN_STATE=$LAST_STATE
+  load_run_env || return 1
+  APP_PID=$SPAWN_PID
+  APP_LSTART=wrong
+  APP_COMMAND=$cmd
+  APP_UID=$uid
+  write_run_env "$RUN_STATE/run.env" || return 1
+  capture "$CLI" cleanup --id "$LAST_ID"
+  [ "$CAP_STATUS" -ne 0 ] || fail "forced cleanup returned 0: $CAP_OUT"
+  [ -d "$LAST_STATE" ] || fail "forced cleanup removed state"
+  [ -f "$LAST_STATE/handlers.after" ] || fail "forced cleanup did not write handlers.after"
+  case "$CAP_OUT" in
+    *File\ exists*) fail "forced cleanup failed on the snapshot file: $CAP_OUT" ;;
+  esac
+  if ! "$REAL_PS" -p "$SPAWN_PID" >/dev/null; then
+    fail "forced cleanup killed the process"
+  fi
+  load_run_env || return 1
+  APP_PID=
+  APP_LSTART=
+  APP_COMMAND=
+  APP_UID=
+  write_run_env "$RUN_STATE/run.env" || return 1
+  capture "$CLI" cleanup --id "$LAST_ID"
+  [ "$CAP_STATUS" -eq 0 ] || fail "cleanup retry failed: $CAP_OUT"
+  [ ! -d "$LAST_STATE" ] || fail "cleanup retry left state"
+  if ! printf '%s\n' "$CAP_OUT" | grep -F -x -q -- cleaned; then
+    fail "cleanup retry did not say cleaned: $CAP_OUT"
+  fi
+  if ! "$REAL_PS" -p "$SPAWN_PID" >/dev/null; then
+    fail "cleanup retry killed a process that was no longer recorded"
+  fi
+  abort_spawn || return 1
+  do_launch || return 1
+  mkdir -p "$LAST_STATE/sandbox/registered_faces/synth_a" || return 1
+  printf 'template\n' > "$LAST_STATE/sandbox/registered_faces/synth_a/synth_a_avgface.png" || return 1
+  printf 'not-a-real-shim\n' > "$LAST_STATE/bin/libfakevideo.so" || return 1
+  printf 'partial\n' > "$LAST_STATE/handlers.after" || return 1
+  chmod 600 "$LAST_STATE/handlers.after" || return 1
+  EVIDENCE=$LAST_EVIDENCE
+  capture "$CLI" recover --id "$LAST_ID"
+  [ "$CAP_STATUS" -eq 0 ] || fail "recover failed: $CAP_OUT"
+  [ ! -d "$LAST_STATE" ] || fail "recover left state"
+  [ ! -e "$LAST_STATE/bin/libfakevideo.so" ] || fail "recover left the shim"
+  [ ! -e "$LAST_STATE/sandbox/registered_faces/synth_a/synth_a_avgface.png" ] || fail "recover left the template"
+  [ -d "$EVIDENCE" ] || fail "recover removed evidence"
+  [ -f "$EVIDENCE/recover.txt" ] || fail "recover wrote no evidence"
+  grep -F -q 'shim=present' "$EVIDENCE/recover.txt" || fail "recover evidence missed the shim"
+  grep -F -q 'synth_a_avgface.png' "$EVIDENCE/recover.txt" || fail "recover evidence missed the template"
+  grep -F -q 'removed=yes' "$EVIDENCE/recover.txt" || fail "recover evidence did not record removal"
+  if ! printf '%s\n' "$CAP_OUT" | grep -F -x -q -- reclaimed; then
+    fail "recover did not say reclaimed: $CAP_OUT"
+  fi
+  mode=$(mode_of "$EVIDENCE/recover.txt") || return 1
+  case "$mode" in
+    600\ *) ;;
+    *) fail "recover evidence mode $mode" ;;
+  esac
+  do_launch || return 1
+  spawn_setsid sleep 40 || return 1
+  note_spawn || return 1
+  cmd=$(ps_command "$SPAWN_PID") || return 1
+  uid=$(ps_uid "$SPAWN_PID") || return 1
+  RUN_STATE=$LAST_STATE
+  load_run_env || return 1
+  APP_PID=$SPAWN_PID
+  APP_LSTART=wrong
+  APP_COMMAND=$cmd
+  APP_UID=$uid
+  write_run_env "$RUN_STATE/run.env" || return 1
+  EVIDENCE=$LAST_EVIDENCE
+  capture "$CLI" recover --id "$LAST_ID"
+  [ "$CAP_STATUS" -ne 0 ] || fail "recover with a live process returned 0: $CAP_OUT"
+  [ ! -d "$LAST_STATE" ] || fail "live recover left state"
+  if ! "$REAL_PS" -p "$SPAWN_PID" >/dev/null; then
+    fail "recover killed a process whose identity did not match"
+  fi
+  [ -f "$EVIDENCE/recover.txt" ] || fail "failed recover wrote no evidence"
+  grep -F -q 'process=left' "$EVIDENCE/recover.txt" || fail "recover evidence missed the live process: $(cat "$EVIDENCE/recover.txt")"
+  grep -F -q 'removed=yes' "$EVIDENCE/recover.txt" || fail "live recover did not record removal"
+  case "$CAP_OUT" in
+    *recover\ incomplete*) ;;
+    *) fail "recover failure output: $CAP_OUT" ;;
+  esac
+  abort_spawn || return 1
+}
+
+test_darwin_camera() {
+  local bin repo id state evidence marker saved_path fake status
+  bin="$REGRESS/darwin-cam"
+  mkdir -p "$bin" || return 1
+  marker="$REGRESS/gcc-called"
+  rm -f "$marker" "$REGRESS/uv.env" "$REGRESS/uv.args" || return 1
+  cat > "$bin/uname" << 'EOF' || return 1
+#!/bin/sh
+echo Darwin
+EOF
+  cat > "$bin/gcc" << EOF || return 1
+#!/bin/sh
+touch "$marker"
+exit 1
+EOF
+  cat > "$bin/uv" << EOF || return 1
+#!/bin/sh
+printf '%s\n' "\$*" >> "$REGRESS/uv.args"
+: > "$REGRESS/uv.env"
+if [ -n "\${LD_PRELOAD:-}" ]; then
+  printf '%s\n' "LD_PRELOAD=\$LD_PRELOAD" >> "$REGRESS/uv.env"
+fi
+if [ -n "\${DYLD_INSERT_LIBRARIES:-}" ]; then
+  printf '%s\n' "DYLD_INSERT_LIBRARIES=\$DYLD_INSERT_LIBRARIES" >> "$REGRESS/uv.env"
+fi
+for arg in "\$@"; do
+  if [ -f "\$arg" ] && grep -q 'cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION)' "\$arg"; then
+    if [ "\${VMV_TEST_CAMERA:-}" = open ]; then
+      printf '%s\n' 'shape=(2, 2, 3)'
+      exit 0
+    fi
+    exit 3
+  fi
+done
+case "\$*" in
+  *mediapipe*)
+    printf '%s\n' 4.11.0
+    exit 0
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "$bin/uname" "$bin/gcc" "$bin/uv" || return 1
+  repo="$REGRESS/darwin-repo"
+  make_repo "$repo" || return 1
+  note_dir "$repo"
+  printf 'print("face")\n' > "$repo/face_registration.py" || return 1
+  printf '[project]\nname = "vmv"\nversion = "0"\n' > "$repo/pyproject.toml" || return 1
+  git -C "$repo" add face_registration.py pyproject.toml || return 1
+  git -C "$repo" -c user.email=vmv@example.com -c user.name=vmv commit -q -m app || return 1
+  capture env PATH="$bin:$REAL_PATH" DYLD_INSERT_LIBRARIES=/tmp/vmv-poison.so LD_PRELOAD=/tmp/vmv-poison.so "$CLI" launch --repo "$repo"
+  [ "$CAP_STATUS" -eq 0 ] || fail "darwin launch failed: $CAP_OUT"
+  id=$(field "$CAP_OUT" run_id) || return 1
+  state=$(field "$CAP_OUT" state) || return 1
+  evidence=$(field "$CAP_OUT" evidence) || return 1
+  note_dir "$state"
+  note_dir "$evidence"
+  [ ! -e "$marker" ] || fail "darwin launch called gcc"
+  [ ! -e "$state/bin/libfakevideo.so" ] || fail "darwin launch built the shim"
+  capture env PATH="$bin:$REAL_PATH" "$CLI" run --id "$id" -- printenv CFFIXED_USER_HOME
+  [ "$CAP_STATUS" -eq 0 ] || fail "CFFIXED print failed: $CAP_OUT"
+  [ "$CAP_OUT" = "$state/home" ] || fail "CFFIXED_USER_HOME was $CAP_OUT"
+  capture env PATH="$bin:$REAL_PATH" DYLD_INSERT_LIBRARIES=/tmp/vmv-poison.so "$CLI" run --id "$id" -- printenv DYLD_INSERT_LIBRARIES
+  [ "$CAP_STATUS" -ne 0 ] || fail "darwin run kept DYLD_INSERT_LIBRARIES: $CAP_OUT"
+  case "$CAP_OUT" in
+    *vmv-poison*) fail "poisoned DYLD leaked: $CAP_OUT" ;;
+  esac
+  capture env PATH="$bin:$REAL_PATH" DYLD_INSERT_LIBRARIES=/tmp/vmv-poison.so LD_PRELOAD=/tmp/vmv-poison.so "$CLI" doctor --id "$id"
+  [ "$CAP_STATUS" -eq 3 ] || fail "darwin doctor returned $CAP_STATUS: $CAP_OUT"
+  case "$CAP_OUT" in
+    *camera\ shim\ missing*) fail "darwin doctor blamed the shim: $CAP_OUT" ;;
+  esac
+  case "$CAP_OUT" in
+    *"will not inject a library"*) ;;
+    *) fail "darwin doctor message: $CAP_OUT" ;;
+  esac
+  case "$CAP_OUT" in
+    *'doctor: ok'*) fail "darwin doctor said ok without a camera" ;;
+  esac
+  [ -f "$state/scratch/avfoundation_probe.py" ] || fail "darwin doctor did not try AVFoundation"
+  grep -F -q 'cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION)' "$state/scratch/avfoundation_probe.py" || fail "probe did not request AVFoundation"
+  if [ -s "$REGRESS/uv.env" ]; then
+    fail "probe inherited a preload: $(cat "$REGRESS/uv.env")"
+  fi
+  if ! grep -F -q 'avfoundation_probe.py' "$REGRESS/uv.args"; then
+    fail "doctor did not run the AVFoundation probe"
+  fi
+  if [ "$REAL_UNAME" = "Linux" ] && [ -n "${DISPLAY:-}" ] && command -v xdotool >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1; then
+    capture env PATH="$bin:$REAL_PATH" "$CLI" drive --id "$id" register-face
+    [ "$CAP_STATUS" -eq 3 ] || fail "darwin drive returned $CAP_STATUS: $CAP_OUT"
+    case "$CAP_OUT" in
+      *camera\ shim\ missing*) fail "darwin drive blamed the shim: $CAP_OUT" ;;
+    esac
+    case "$CAP_OUT" in
+      *"will not inject a library"*) ;;
+      *) fail "darwin drive message: $CAP_OUT" ;;
+    esac
+  fi
+  capture env PATH="$bin:$REAL_PATH" "$CLI" cleanup --id "$id"
+  [ "$CAP_STATUS" -eq 0 ] || fail "darwin cleanup failed: $CAP_OUT"
+  rm -f "$REGRESS/uv.args" "$REGRESS/uv.env" || return 1
+  capture env PATH="$bin:$REAL_PATH" "$CLI" launch --repo "$repo"
+  [ "$CAP_STATUS" -eq 0 ] || fail "second darwin launch failed: $CAP_OUT"
+  id=$(field "$CAP_OUT" run_id) || return 1
+  state=$(field "$CAP_OUT" state) || return 1
+  evidence=$(field "$CAP_OUT" evidence) || return 1
+  note_dir "$state"
+  note_dir "$evidence"
+  [ ! -e "$state/bin/libfakevideo.so" ] || fail "open-camera darwin launch built the shim"
+  capture env PATH="$bin:$REAL_PATH" VMV_TEST_CAMERA=open "$CLI" doctor --id "$id"
+  [ "$CAP_STATUS" -eq 0 ] || fail "darwin doctor with a camera failed: $CAP_OUT"
+  case "$CAP_OUT" in
+    *camera=device*) ;;
+    *) fail "darwin doctor camera line: $CAP_OUT" ;;
+  esac
+  case "$CAP_OUT" in
+    *camera=shim*) fail "darwin doctor reported the shim" ;;
+  esac
+  case "$CAP_OUT" in
+    *'shape=(2, 2, 3)'*) ;;
+    *) fail "darwin doctor missed the frame shape: $CAP_OUT" ;;
+  esac
+  case "$CAP_OUT" in
+    *'doctor: ok'*) ;;
+    *) fail "darwin doctor was not ok: $CAP_OUT" ;;
+  esac
+  capture env PATH="$bin:$REAL_PATH" "$CLI" cleanup --id "$id"
+  [ "$CAP_STATUS" -eq 0 ] || fail "cleanup after open camera failed: $CAP_OUT"
+  # shellcheck source=drive.sh
+  . "$SCRIPT_DIR/drive.sh"
+  fake="$REGRESS/darwin-direct"
+  mkdir -p "$fake/bin" "$fake/sandbox" "$fake/scratch" "$fake/home" "$fake/runtime" || return 1
+  cp "$bin/uv" "$fake/bin/uv" || return 1
+  chmod 700 "$fake/bin/uv" || return 1
+  saved_path=$PATH
+  PATH="$bin:$REAL_PATH"
+  RUN_STATE=$fake
+  export DYLD_INSERT_LIBRARIES=/tmp/vmv-poison.so
+  export LD_PRELOAD=/tmp/vmv-poison.so
+  unset VMV_TEST_CAMERA || true
+  status=0
+  camera_on "$fake/no.ppm" || status=$?
+  [ "$status" -eq 3 ] || fail "direct darwin camera_on returned $status"
+  [ -z "${DYLD_INSERT_LIBRARIES:-}" ] || fail "direct camera_on left DYLD set"
+  [ -z "${LD_PRELOAD:-}" ] || fail "direct camera_on left LD_PRELOAD set"
+  export VMV_TEST_CAMERA=open
+  status=0
+  camera_on "$fake/no.ppm" || status=$?
+  [ "$status" -eq 0 ] || fail "direct open camera_on returned $status"
+  [ -z "${LD_PRELOAD:-}" ] || fail "open camera set LD_PRELOAD: ${LD_PRELOAD:-}"
+  [ -z "${DYLD_INSERT_LIBRARIES:-}" ] || fail "open camera set DYLD"
+  unset VMV_TEST_CAMERA || true
+  PATH=$saved_path
+  hash -r || true
+  if [ "$REAL_UNAME" = "Linux" ]; then
+    RUN_STATE=$fake
+    if [ -e /dev/video0 ]; then
+      status=0
+      camera_on "$fake/missing.ppm" || status=$?
+      [ "$status" -eq 0 ] || fail "real video device was rejected: $status"
+      [ -z "${LD_PRELOAD:-}" ] || fail "real video device set LD_PRELOAD"
+    else
+      status=0
+      camera_on "$fake/missing.ppm" || status=$?
+      [ "$status" -eq 1 ] || fail "linux missing shim returned $status"
+      printf 'shim\n' > "$fake/bin/libfakevideo.so" || return 1
+      printf 'ppm\n' > "$fake/frame.ppm" || return 1
+      status=0
+      camera_on "$fake/frame.ppm" || status=$?
+      [ "$status" -eq 0 ] || fail "linux shim camera_on returned $status"
+      [ "$LD_PRELOAD" = "$fake/bin/libfakevideo.so" ] || fail "shim was not preloaded: ${LD_PRELOAD:-}"
+      [ -z "${DYLD_INSERT_LIBRARIES:-}" ] || fail "shim path set DYLD"
+      camera_off || return 1
+      [ -z "${LD_PRELOAD:-}" ] || fail "camera_off left LD_PRELOAD"
+    fi
+  fi
+  unset LD_PRELOAD || true
+  unset FAKEVIDEO_PPM || true
+  unset FAKEVIDEO_DEVICE || true
+  unset DYLD_INSERT_LIBRARIES || true
+  RUN_STATE=
+  if grep -n 'DYLD_INSERT_LIBRARIES=' \
+    "$SCRIPT_DIR/verify-machine-vision" \
+    "$SCRIPT_DIR/lib.sh" \
+    "$SCRIPT_DIR/drive.sh" \
+    "$SCRIPT_DIR/guard.py"; then
+    fail "script assigns DYLD_INSERT_LIBRARIES"
+  fi
+}
+
+test_stop_and_space_deadline() {
+  local start elapsed key lstart cmd uid status
+  # shellcheck source=drive.sh
+  . "$SCRIPT_DIR/drive.sh"
+  spawn_setsid python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)' || return 1
+  note_spawn || return 1
+  start=$SECONDS
+  stop_recorded_process "$SPAWN_PID" "$SPAWN_LSTART" "$SPAWN_CMD" "$SPAWN_UID" || fail "stop of a TERM-ignoring process failed"
+  elapsed=$((SECONDS - start))
+  [ "$elapsed" -lt 12 ] || fail "stop hung for ${elapsed}s"
+  if "$REAL_PS" -p "$SPAWN_PID" >/dev/null; then
+    fail "KILL left the TERM-ignoring process"
+  fi
+  spawn_setsid sleep 40 || return 1
+  note_spawn || return 1
+  start=$SECONDS
+  send_space_until_exit "Verify Machine Vision Absent" "$SPAWN_PID" 3 || return 1
+  elapsed=$((SECONDS - start))
+  [ "$elapsed" -lt 10 ] || fail "space helper ran for ${elapsed}s"
+  if ! "$REAL_PS" -p "$SPAWN_PID" >/dev/null; then
+    fail "space deadline killed the app"
+  fi
+  send_space_until_exit "Verify Machine Vision Absent" "$SPAWN_PID" 80 &
+  key=$!
+  sleep 0.2
+  lstart=$(ps_lstart "$key") || return 1
+  cmd=$(ps_command "$key") || return 1
+  uid=$(ps_uid "$key") || return 1
+  status=0
+  reap_verified_pid "$key" "wrong" "$cmd" "$uid" || status=$?
+  [ "$status" -ne 0 ] || fail "wrong helper identity was reaped"
+  if ! "$REAL_PS" -p "$key" >/dev/null; then
+    fail "wrong helper identity killed the helper"
+  fi
+  if ! "$REAL_PS" -p "$SPAWN_PID" >/dev/null; then
+    fail "helper reap killed the app"
+  fi
+  start=$SECONDS
+  reap_verified_pid "$key" "$lstart" "$cmd" "$uid" || fail "helper reap failed"
+  elapsed=$((SECONDS - start))
+  [ "$elapsed" -lt 8 ] || fail "helper reap hung for ${elapsed}s"
+  if "$REAL_PS" -p "$key" >/dev/null; then
+    fail "helper still running"
+  fi
+  if ! "$REAL_PS" -p "$SPAWN_PID" >/dev/null; then
+    fail "helper reap killed the app"
+  fi
+  abort_spawn || return 1
+}
+
 test_source_shape() {
   local token file
   token=$(printf '%s%s' 'map' 'file')
@@ -786,6 +1149,9 @@ run_test evidence-and-paths test_evidence_and_paths
 run_test hash-snapshot test_hash_snapshot_explicit
 run_test process-identity test_process_identity
 run_test cleanup-identity test_cleanup_identity
+run_test cleanup-retry-and-recover test_cleanup_retry_and_recover
+run_test darwin-camera test_darwin_camera
+run_test stop-and-space-deadline test_stop_and_space_deadline
 run_test git-copy-and-isolation test_git_copy_and_isolation
 run_test watch-chmod-handlers test_watch_chmod_handlers
 run_test names-urls-and-die test_names_urls_and_die

@@ -30,6 +30,7 @@ RESERVED_NAMES = {
     "fakevideo.c",
     "synthetic_face.py",
     "side-effects.log",
+    "recover.txt",
 }
 
 
@@ -182,6 +183,59 @@ def snapshot_tree(root: str, dest: str) -> None:
         lines.append(f"{rel}\t{stat.S_IMODE(st.st_mode):04o}\t{st.st_size}\t{file_hash}")
     payload = ("\n".join(lines) + ("\n" if lines else "")).encode()
     write_bytes_no_follow(dest, payload)
+
+
+def write_bytes_replace(path: str, payload: bytes) -> None:
+    """Replace a cleanup state file. Temp file plus rename, never O_EXCL on the final path."""
+    parent = os.path.dirname(path) or "."
+    assert_private_dir(parent)
+    if symlink_component(parent) or (os.path.lexists(path) and os.path.islink(path)):
+        die(f"refusing symlink: {path}")
+    base = os.path.basename(path)
+    if base in ("", ".", ".."):
+        die(f"refusing state name: {path}")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    fd = None
+    tmp = ""
+    n = 0
+    while n < 20:
+        candidate = os.path.join(parent, f".{base}.{os.getpid()}.{n}.tmp")
+        if os.path.islink(candidate):
+            die(f"refusing symlink: {candidate}")
+        try:
+            fd = os.open(candidate, flags, 0o600)
+            tmp = candidate
+            break
+        except FileExistsError:
+            n += 1
+            continue
+        except OSError as exc:
+            die(f"refusing state write: {path}: {exc}")
+    if fd is None or not tmp:
+        die(f"refusing state write: {path}: could not create a temp file")
+    try:
+        os.write(fd, payload)
+        os.fchmod(fd, 0o600)
+        os.fsync(fd)
+        file_stat = os.fstat(fd)
+    finally:
+        os.close(fd)
+    try:
+        os.replace(tmp, path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        die(f"refusing state write: {path}: {exc}")
+    try:
+        path_stat = os.lstat(path)
+    except OSError as exc:
+        die(f"unreadable: {path}: {exc}")
+    if stat.S_ISLNK(path_stat.st_mode) or path_stat.st_ino != file_stat.st_ino:
+        die(f"state path changed during write: {path}")
+    if stat.S_IMODE(path_stat.st_mode) != 0o600:
+        die(f"state mode is not 600: {path}")
 
 
 def write_bytes_no_follow(path: str, payload: bytes) -> None:
@@ -372,6 +426,8 @@ def handlers_snapshot(dest: str, real_home: str) -> None:
             lines.append(f"preferences\tabsent\t{pref}")
         else:
             for path, st in iter_entries(pref):
+                if os.path.basename(path) == ".DS_Store":
+                    continue
                 if not stat.S_ISREG(st.st_mode):
                     continue
                 # Compare handler files by full path, not by bundle id.
@@ -382,7 +438,7 @@ def handlers_snapshot(dest: str, real_home: str) -> None:
     parent = os.path.dirname(dest)
     if parent and not os.path.isdir(parent):
         die(f"missing snapshot dir: {parent}")
-    write_bytes_no_follow(dest, payload)
+    write_bytes_replace(dest, payload)
 
 
 def find_runs(prefix: str, run_id: str) -> None:
@@ -486,6 +542,10 @@ def main(argv: list[str]) -> None:
         return
     if command == "write-evidence":
         write_evidence(args[0], args[1])
+        return
+    if command == "write-replace":
+        payload = sys.stdin.buffer.read()
+        write_bytes_replace(args[0], payload)
         return
     if command == "chmod-inside":
         chmod_writable_inside(args[0], args[1])

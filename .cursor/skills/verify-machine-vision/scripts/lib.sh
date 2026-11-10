@@ -185,7 +185,11 @@ ps_self_ok() {
 
 # The process group comes from the live ps row. Nothing in run.env is a pgid.
 signal_live_group() {
-  local pid="$1" pgid self_pgid
+  local pid="$1" sig="${2:-TERM}" pgid self_pgid
+  case "$sig" in
+    TERM|KILL) ;;
+    *) return 1 ;;
+  esac
   pgid=$(ps_pgid "$pid") || return 1
   self_pgid=$(ps_pgid $$) || return 1
   [ "$pgid" = "$pid" ] || return 1
@@ -193,38 +197,98 @@ signal_live_group() {
   case "$pgid" in
     ''|*[!0-9]*|0|1) return 1 ;;
   esac
-  kill -TERM -- "-$pgid" || return 1
+  kill "-$sig" -- "-$pgid" || return 1
 }
 
-stop_recorded_process() {
-  local pid="$1" exp_lstart="$2" exp_cmd="$3" exp_uid="$4"
-  local lstart cmd uid
-  ps_self_ok || return 1
-  if ! lstart=$(ps_lstart "$pid"); then
-    return 0
-  fi
-  cmd=$(ps_command "$pid") || return 1
-  uid=$(ps_uid "$pid") || return 1
-  [ "$lstart" = "$exp_lstart" ] || return 1
-  [ "$cmd" = "$exp_cmd" ] || return 1
-  [ "$uid" = "$exp_uid" ] || return 1
-  signal_live_group "$pid" || return 1
+wait_until_gone() {
+  local pid="$1" tries="$2"
+  while [ "$tries" -gt 0 ]; do
+    if ! ps_lstart "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.2
+    tries=$((tries - 1))
+  done
+  return 1
 }
 
-signal_verified_pid() {
+identity_matches() {
   local pid="$1" exp_lstart="$2" exp_cmd="$3" exp_uid="$4"
   local lstart cmd uid
-  ps_self_ok || return 1
   lstart=$(ps_lstart "$pid") || return 1
   cmd=$(ps_command "$pid") || return 1
   uid=$(ps_uid "$pid") || return 1
   [ "$lstart" = "$exp_lstart" ] || return 1
   [ "$cmd" = "$exp_cmd" ] || return 1
   [ "$uid" = "$exp_uid" ] || return 1
+}
+
+stop_recorded_process() {
+  local pid="$1" exp_lstart="$2" exp_cmd="$3" exp_uid="$4"
+  ps_self_ok || return 1
+  if ! ps_lstart "$pid" >/dev/null 2>&1; then
+    return 0
+  fi
+  identity_matches "$pid" "$exp_lstart" "$exp_cmd" "$exp_uid" || return 1
+  signal_live_group "$pid" TERM || return 1
+  if wait_until_gone "$pid" 15; then
+    wait "$pid" 2>/dev/null || true
+    return 0
+  fi
+  if ! ps_lstart "$pid" >/dev/null 2>&1; then
+    wait "$pid" 2>/dev/null || true
+    return 0
+  fi
+  identity_matches "$pid" "$exp_lstart" "$exp_cmd" "$exp_uid" || return 1
+  signal_live_group "$pid" KILL || return 1
+  wait_until_gone "$pid" 15 || return 1
+  wait "$pid" 2>/dev/null || true
+}
+
+signal_verified_pid() {
+  local pid="$1" exp_lstart="$2" exp_cmd="$3" exp_uid="$4" sig="${5:-TERM}"
+  ps_self_ok || return 1
+  case "$sig" in
+    TERM|KILL) ;;
+    *) return 1 ;;
+  esac
+  identity_matches "$pid" "$exp_lstart" "$exp_cmd" "$exp_uid" || return 1
   case "$pid" in
     ''|*[!0-9]*|0|1) return 1 ;;
   esac
-  kill -TERM -- "$pid" || return 1
+  kill "-$sig" -- "$pid" || return 1
+}
+
+reap_verified_pid() {
+  local pid="$1" exp_lstart="$2" exp_cmd="$3" exp_uid="$4"
+  if [ -z "$pid" ]; then
+    return 0
+  fi
+  if ! ps_lstart "$pid" >/dev/null 2>&1; then
+    set +e
+    wait "$pid"
+    set -e
+    return 0
+  fi
+  signal_verified_pid "$pid" "$exp_lstart" "$exp_cmd" "$exp_uid" TERM || return 1
+  if wait_until_gone "$pid" 15; then
+    set +e
+    wait "$pid"
+    set -e
+    return 0
+  fi
+  if ! ps_lstart "$pid" >/dev/null 2>&1; then
+    set +e
+    wait "$pid"
+    set -e
+    return 0
+  fi
+  signal_verified_pid "$pid" "$exp_lstart" "$exp_cmd" "$exp_uid" KILL || return 1
+  wait_until_gone "$pid" 15 || return 1
+  set +e
+  wait "$pid"
+  set -e
+  return 0
 }
 
 settle_spawn() {
@@ -343,6 +407,7 @@ apply_isolated_env() {
   export XDG_RUNTIME_DIR="$state/runtime"
   export GOTELEMETRY=off
   export PYTHONUNBUFFERED=1
+  unset DYLD_INSERT_LIBRARIES
   for name in GOMODCACHE GOENV PLAYWRIGHT_BROWSERS_PATH NPM_CONFIG_CACHE UV_CACHE_DIR XAUTHORITY; do
     if value=$(read_one_line "$state/cache/$name"); then
       export "$name=$value"

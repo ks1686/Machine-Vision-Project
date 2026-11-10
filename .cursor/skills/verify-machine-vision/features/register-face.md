@@ -32,7 +32,7 @@ Preconditions:
 
 ## Gotchas
 
-- The script hardcodes camera index 0. With no `/dev/video0`, the harness loads the camera shim. A real webcam will not.
+- The script hardcodes camera index 0. On Linux with no `/dev/video0`, the harness loads the camera shim. A real webcam does not. On Darwin the harness opens that index with AVFoundation and never loads a shim. If the open fails, the drive exits 3.
 - Auto-capture runs about every half second for two rounds. The window stays up for roughly half a minute. Do not kill it when the first still appears.
 - Captures and the averaged face are mode `600`. Directories are mode `700`.
 - The shim serves RGB24. OpenCV 4.11 treats a BGR24 buffer as one row, and MediaPipe then rejects the frame.

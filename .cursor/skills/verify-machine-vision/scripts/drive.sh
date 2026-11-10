@@ -22,25 +22,86 @@ require_template() {
   [ -f "$RUN_STATE/sandbox/registered_faces/$USER_ID/${USER_ID}_avgface.png" ]
 }
 
-camera_on() {
-  local ppm="$1"
-  if [ -e /dev/video0 ]; then
+probe_darwin_camera() {
+  local script status
+  script="$RUN_STATE/scratch/avfoundation_probe.py"
+  mkdir -p "$RUN_STATE/scratch" || return 1
+  cat > "$script" << 'PY' || return 1
+import cv2
+cap = cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION)
+opened = bool(cap.isOpened())
+ok = False
+frame = None
+if opened:
+    ok, frame = cap.read()
+cap.release()
+if not opened or not ok or frame is None or getattr(frame, "ndim", 0) != 3:
+    raise SystemExit(3)
+if frame.shape[0] < 1 or frame.shape[1] < 1:
+    raise SystemExit(3)
+print("shape={0}".format(tuple(int(v) for v in frame.shape)))
+PY
+  chmod 600 "$script" || return 1
+  : > "$RUN_STATE/scratch/avfoundation.shape" || return 1
+  : > "$RUN_STATE/scratch/avfoundation.err" || return 1
+  status=0
+  (
+    apply_isolated_env "$RUN_STATE" || exit 1
     unset LD_PRELOAD
     unset FAKEVIDEO_PPM
     unset FAKEVIDEO_DEVICE
-    return 0
-  fi
-  [ -f "$RUN_STATE/bin/libfakevideo.so" ] || return 1
-  [ -f "$ppm" ] || return 1
-  export LD_PRELOAD="$RUN_STATE/bin/libfakevideo.so"
-  export FAKEVIDEO_PPM="$ppm"
-  export FAKEVIDEO_DEVICE=/dev/video0
+    cd "$RUN_STATE/sandbox" || exit 1
+    "$RUN_STATE/bin/uv" run --frozen --directory "$RUN_STATE/sandbox" python -u "$script"
+  ) > "$RUN_STATE/scratch/avfoundation.shape" 2> "$RUN_STATE/scratch/avfoundation.err" || status=$?
+  return "$status"
+}
+
+camera_on() {
+  local ppm="$1" os status
+  unset DYLD_INSERT_LIBRARIES
+  unset LD_PRELOAD
+  os=$(uname -s) || return 1
+  case "$os" in
+    Darwin)
+      unset LD_PRELOAD
+      unset FAKEVIDEO_PPM
+      unset FAKEVIDEO_DEVICE
+      status=0
+      probe_darwin_camera || status=$?
+      if [ "$status" -ne 0 ]; then
+        printf 'error: Darwin has no /dev/video0 camera node and this harness will not inject a library\n' >&2
+        return 3
+      fi
+      return 0
+      ;;
+    Linux)
+      if [ -e /dev/video0 ]; then
+        unset LD_PRELOAD
+        unset FAKEVIDEO_PPM
+        unset FAKEVIDEO_DEVICE
+        return 0
+      fi
+      if [ ! -f "$RUN_STATE/bin/libfakevideo.so" ] || [ ! -f "$ppm" ]; then
+        printf 'error: camera shim missing\n' >&2
+        return 1
+      fi
+      export LD_PRELOAD="$RUN_STATE/bin/libfakevideo.so"
+      export FAKEVIDEO_PPM="$ppm"
+      export FAKEVIDEO_DEVICE=/dev/video0
+      return 0
+      ;;
+    *)
+      printf 'error: unsupported platform: %s\n' "$os" >&2
+      return 1
+      ;;
+  esac
 }
 
 camera_off() {
   unset LD_PRELOAD
   unset FAKEVIDEO_PPM
   unset FAKEVIDEO_DEVICE
+  unset DYLD_INSERT_LIBRARIES
 }
 
 make_frames() {
@@ -112,9 +173,12 @@ finish_bg() {
 }
 
 send_space_until_exit() {
-  local title="$1" pid="$2" wid
+  local title="$1" pid="$2" tries="$3" wid
   release_stuck_keys || true
-  while ps_lstart "$pid" >/dev/null 2>&1; do
+  while [ "$tries" -gt 0 ]; do
+    if ! ps_lstart "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
     if wid=$(exact_window_id "$title"); then
       if [ -n "$wid" ]; then
         xdotool windowactivate --sync "$wid" >/dev/null 2>&1 || true
@@ -122,7 +186,9 @@ send_space_until_exit() {
       fi
     fi
     sleep 0.4
+    tries=$((tries - 1))
   done
+  return 0
 }
 
 note_manifest() {
@@ -143,7 +209,7 @@ drive_register_face() {
   require_gui || return 1
   make_frames || return 1
   note_manifest manifest.register || return 1
-  camera_on "$RUN_STATE/frames/frontal.ppm" || return 1
+  camera_on "$RUN_STATE/frames/frontal.ppm" || return $?
   log="$RUN_STATE/scratch/register.log"
   run_py_bg "$log" face_registration.py "$USER_ID" || {
     camera_off
@@ -186,10 +252,27 @@ drive_register_face() {
   grep -F -q -- "${USER_ID}_avgface.png" "$RUN_EVIDENCE/register-new-files.txt" || return 1
 }
 
+stop_key_helper() {
+  local pid="$1" lstart="$2" cmd="$3" uid="$4"
+  if [ -z "$pid" ]; then
+    return 0
+  fi
+  if [ -z "$lstart" ] || [ -z "$cmd" ] || [ -z "$uid" ]; then
+    if ! ps_lstart "$pid" >/dev/null 2>&1; then
+      set +e
+      wait "$pid"
+      set -e
+      return 0
+    fi
+    return 1
+  fi
+  reap_verified_pid "$pid" "$lstart" "$cmd" "$uid"
+}
+
 capture_one_auth() {
-  local ppm="$1" transcript="$2" shot="$3" log key_pid
+  local ppm="$1" transcript="$2" shot="$3" log key_pid key_lstart key_cmd key_uid
   release_stuck_keys || true
-  camera_on "$ppm" || return 1
+  camera_on "$ppm" || return $?
   log="$RUN_STATE/scratch/auth.log"
   : > "$log" || return 1
   run_py_bg "$log" authenticate.py "$USER_ID" || {
@@ -207,19 +290,18 @@ capture_one_auth() {
     camera_off
     return 1
   fi
-  send_space_until_exit "$WIN_AUTH" "$SPAWN_PID" &
+  send_space_until_exit "$WIN_AUTH" "$SPAWN_PID" 120 &
   key_pid=$!
+  key_lstart=$(ps_lstart "$key_pid" 2>/dev/null) || key_lstart=
+  key_cmd=$(ps_command "$key_pid" 2>/dev/null) || key_cmd=
+  key_uid=$(ps_uid "$key_pid" 2>/dev/null) || key_uid=
   if ! finish_bg "$log" 40; then
-    set +e
-    wait "$key_pid"
-    set -e
+    stop_key_helper "$key_pid" "$key_lstart" "$key_cmd" "$key_uid" || true
     publish_file "$transcript" "$log" || true
     camera_off
     return 1
   fi
-  set +e
-  wait "$key_pid"
-  set -e
+  stop_key_helper "$key_pid" "$key_lstart" "$key_cmd" "$key_uid" || true
   camera_off
   publish_file "$transcript" "$log" || return 1
   cp "$log" "$RUN_STATE/scratch/last-auth.log" || return 1
@@ -231,10 +313,10 @@ drive_authenticate() {
   require_gui || return 1
   require_template || return 1
   make_frames || return 1
-  capture_one_auth "$RUN_STATE/frames/frontal.ppm" "authenticate-accept.txt" "authenticate-accept.png" || return 1
+  capture_one_auth "$RUN_STATE/frames/frontal.ppm" "authenticate-accept.txt" "authenticate-accept.png" || return $?
   grep -F -q -- "Authentication successful" "$RUN_STATE/scratch/last-auth.log" || return 1
   grep -F -q -- "Identified as: $USER_ID" "$RUN_STATE/scratch/last-auth.log" || return 1
-  capture_one_auth "$RUN_STATE/frames/shifted.ppm" "authenticate-reject.txt" "authenticate-reject.png" || return 1
+  capture_one_auth "$RUN_STATE/frames/shifted.ppm" "authenticate-reject.txt" "authenticate-reject.png" || return $?
   grep -F -q -- "Authentication failed - No match found" "$RUN_STATE/scratch/last-auth.log" || return 1
   grep -F -q -- "below minimum threshold 78.0%" "$RUN_STATE/scratch/last-auth.log" || return 1
   grep -F -q -- "Final confidence: 0.0%" "$RUN_STATE/scratch/last-auth.log" || return 1
@@ -245,7 +327,7 @@ drive_compare_faces() {
   require_gui || return 1
   require_template || return 1
   make_frames || return 1
-  capture_one_auth "$RUN_STATE/frames/frontal.ppm" "compare-transcript.txt" "compare-window.png" || return 1
+  capture_one_auth "$RUN_STATE/frames/frontal.ppm" "compare-transcript.txt" "compare-window.png" || return $?
   grep -F -q -- "Comparison for $USER_ID" "$RUN_STATE/scratch/last-auth.log" || return 1
   grep -F -q -- "Final confidence:" "$RUN_STATE/scratch/last-auth.log" || return 1
   grep -F -q -- "Pose difference:" "$RUN_STATE/scratch/last-auth.log" || return 1
@@ -327,7 +409,7 @@ PY
   apply_isolated_env "$RUN_STATE" || return 1
   "$RUN_STATE/bin/uv" run --frozen --directory "$RUN_STATE/sandbox" python -u \
     "$RUN_STATE/scratch/edit_pixels.py" "$avg" || return 1
-  capture_one_auth "$RUN_STATE/frames/frontal.ppm" "storage-edit.txt" "storage-edit.png" || return 1
+  capture_one_auth "$RUN_STATE/frames/frontal.ppm" "storage-edit.txt" "storage-edit.png" || return $?
   if ! grep -F -q -- "Authentication successful" "$RUN_STATE/scratch/last-auth.log"; then
     return 1
   fi
@@ -342,7 +424,7 @@ if len(data) < 64:
 data[40] ^= 0xFF
 open(path, "wb").write(data)
 PY
-  capture_one_auth "$RUN_STATE/frames/frontal.ppm" "storage-corrupt.txt" "storage-corrupt.png" || return 1
+  capture_one_auth "$RUN_STATE/frames/frontal.ppm" "storage-corrupt.txt" "storage-corrupt.png" || return $?
   grep -F -q -- "Failed to load averaged face" "$RUN_STATE/scratch/last-auth.log" || return 1
   if grep -F -q -- "Authentication successful" "$RUN_STATE/scratch/last-auth.log"; then
     return 1

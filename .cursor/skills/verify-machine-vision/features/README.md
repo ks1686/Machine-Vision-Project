@@ -6,7 +6,7 @@ This directory is the maintained source for verifying the face CLIs. Read the in
 
 - `uv` is on `PATH`. The repo has `pyproject.toml` and `uv.lock`.
 - Launch with `.cursor/skills/verify-machine-vision/scripts/verify-machine-vision launch --repo <repo>`.
-- Run `doctor --id RUN_ID` and require `doctor: ok`.
+- Run `doctor --id RUN_ID` and require `doctor: ok`. On Darwin, exit 3 means AVFoundation did not open camera 0. The harness will not inject a library there.
 - GUI drives need `DISPLAY`, `xdotool`, and `ffmpeg`. Doctor prints whether they are present.
 - The enrolled user is `synth_a`. Frames are synthetic. No real person's photo is enrolled.
 - Never point a drive at the checkout's own `registered_faces/`. The sandbox inside the run holds the templates.

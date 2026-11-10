@@ -33,3 +33,5 @@ Preconditions:
 - A second synthetic face that only changes color still scores as the same landmarks. The reject frame shifts the center band so the pose difference is above 30 degrees and the score is forced to 0.
 - `Wrong identity` is not this journey. The comparator, given `synth_a`, does not search other users.
 - The depth gate rejects variance under 0.003. The synthetic accept frame is above that line. A flat spoof was not driven.
+- On Darwin the drive exits 3 when AVFoundation cannot open camera 0. The harness does not set `DYLD_INSERT_LIBRARIES`.
+- The SPACE helper stops at its deadline if the window never closes. The drive reaps that helper and returns. It does not wait on it after the app timeout.
