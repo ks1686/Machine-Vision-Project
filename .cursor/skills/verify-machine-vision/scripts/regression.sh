@@ -1098,6 +1098,281 @@ test_stop_and_space_deadline() {
   abort_spawn || return 1
 }
 
+test_tmp_symlink_base() {
+  local real link status base
+  real=$(mktemp -d /tmp/vmv-regress.XXXXXXXX) || return 1
+  note_dir "$real"
+  chmod 700 "$real" || return 1
+  link=$(mktemp /tmp/vmv-regress.XXXXXXXX) || return 1
+  rm -f "$link" || return 1
+  ln -s "$(basename -- "$real")" "$link" || return 1
+  capture "$CLI" check-private "$real"
+  status=$CAP_STATUS
+  capture python3 "$GUARD" resolve-scratch "$real"
+  if [ "$status" -ne 0 ]; then
+    rm -f "$link" || return 1
+    fail "real scratch dir was refused"
+    return 1
+  fi
+  if [ "$CAP_STATUS" -ne 0 ]; then
+    rm -f "$link" || return 1
+    fail "resolve-scratch refused a real dir: $CAP_OUT"
+    return 1
+  fi
+  case "$CAP_OUT" in
+    "$real"|"/private/tmp/"*) ;;
+    *)
+      rm -f "$link" || return 1
+      fail "resolve-scratch changed a real dir: $CAP_OUT"
+      return 1
+      ;;
+  esac
+  capture "$CLI" check-private "$link"
+  status=$CAP_STATUS
+  rm -f "$link" || return 1
+  if [ "$status" -eq 0 ]; then
+    fail "symlink below the temp base was accepted"
+    return 1
+  fi
+  ln -s /etc "$real/jump" || return 1
+  capture python3 "$GUARD" resolve-scratch "$real/jump"
+  if [ "$CAP_STATUS" -eq 0 ]; then
+    fail "resolve-scratch followed a symlink below the base"
+    return 1
+  fi
+  capture "$CLI" check-private "$real/jump"
+  if [ "$CAP_STATUS" -eq 0 ]; then
+    fail "nested symlink was accepted"
+    return 1
+  fi
+  if [ ! -L "$real/jump" ]; then
+    fail "nested symlink was replaced"
+    return 1
+  fi
+  if [ "$REAL_UNAME" = "Darwin" ]; then
+    darwin_tmp_symlink_launch || return 1
+  else
+    linux_tmp_symlink_launch || return 1
+  fi
+}
+
+darwin_tmp_symlink_launch() {
+  local base link status
+  if [ ! -L /tmp ]; then
+    fail "/tmp is not a symlink on Darwin"
+    return 1
+  fi
+  do_launch || {
+    fail "launch failed when /tmp is a symlink"
+    return 1
+  }
+  case "$LAST_STATE" in
+    /private/tmp/vmvrun.*) ;;
+    *)
+      fail "state was not under the resolved base: $LAST_STATE"
+      return 1
+      ;;
+  esac
+  case "$LAST_EVIDENCE" in
+    /private/tmp/vmvevd.*) ;;
+    *)
+      fail "evidence was not under the resolved base: $LAST_EVIDENCE"
+      return 1
+      ;;
+  esac
+  if [ -L "$LAST_STATE" ] || [ -L "$LAST_EVIDENCE" ]; then
+    fail "resolved scratch dir is a symlink"
+    return 1
+  fi
+  base=${LAST_STATE##*/}
+  capture "$CLI" check-private "/tmp/$base"
+  if [ "$CAP_STATUS" -ne 0 ]; then
+    fail "Darwin /tmp path was refused"
+    return 1
+  fi
+  link="/tmp/${base}-link"
+  ln -s "$base" "$link" || return 1
+  capture "$CLI" check-private "$link"
+  status=$CAP_STATUS
+  rm -f "$link" || return 1
+  if [ "$status" -eq 0 ]; then
+    fail "Darwin symlink below the base was accepted"
+    return 1
+  fi
+  if [ ! -d "$LAST_STATE" ]; then
+    fail "refused symlink check removed state"
+    return 1
+  fi
+  ln -s /etc "$LAST_STATE/scratch/jump" || return 1
+  capture "$CLI" check-private "$LAST_STATE/scratch/jump"
+  if [ "$CAP_STATUS" -eq 0 ]; then
+    fail "Darwin nested symlink was accepted"
+    return 1
+  fi
+  rm -f "$LAST_STATE/scratch/jump" || return 1
+  return 0
+}
+
+linux_tmp_symlink_launch() {
+  local root store home_q cli_q root_q store_q regress_q
+  if ! command -v unshare >/dev/null 2>&1; then
+    fail "unshare is required to simulate a /tmp symlink"
+    return 1
+  fi
+  if [ ! -x /usr/sbin/chroot ]; then
+    fail "chroot is required to simulate a /tmp symlink"
+    return 1
+  fi
+  root="$REGRESS/macroot"
+  store="$REGRESS/mac-private"
+  mkdir -p "$root/usr" "$root/private/tmp" "$root/proc" "$root/dev" "$root/etc" "$root/home" "$root/agent" "$root/work" "$store" || return 1
+  chmod 1777 "$store" || return 1
+  ln -s usr/bin "$root/bin" || return 1
+  ln -s usr/lib "$root/lib" || return 1
+  ln -s usr/lib64 "$root/lib64" || return 1
+  rm -rf "$root/tmp" || return 1
+  ln -s private/tmp "$root/tmp" || return 1
+  : > "$root/dev/null" || return 1
+  : > "$root/dev/zero" || return 1
+  : > "$root/dev/urandom" || return 1
+  : > "$root/dev/random" || return 1
+  : > "$root/dev/tty" || return 1
+  home_q=$(printf '%q' "$REAL_HOME") || return 1
+  cli_q=$(printf '%q' "$CLI") || return 1
+  root_q=$(printf '%q' "$root") || return 1
+  store_q=$(printf '%q' "$store") || return 1
+  regress_q=$(printf '%q' "$REGRESS") || return 1
+  cat > "$REGRESS/inside.sh" << EOF || return 1
+#!/bin/bash
+set -eu
+export PATH=/usr/bin:/bin
+export HOME=$home_q
+cd /
+CLI=$cli_q
+result=/work/result.txt
+: > "\$result"
+mark() { printf '%s\n' "\$1" >> "\$result"; }
+out=\$("\$CLI" launch --repo /work/repo 2>>"\$result") || {
+  printf '%s\n' "\$out" >> "\$result"
+  exit 1
+}
+printf '%s\n' "\$out" >> "\$result"
+state=\$(printf '%s\n' "\$out" | sed -n 's/^state=//p')
+evidence=\$(printf '%s\n' "\$out" | sed -n 's/^evidence=//p')
+id=\$(printf '%s\n' "\$out" | sed -n 's/^run_id=//p')
+case "\$state" in
+  /private/tmp/vmvrun.*) ;;
+  *) mark "bad state \$state"; exit 1 ;;
+esac
+case "\$evidence" in
+  /private/tmp/vmvevd.*) ;;
+  *) mark "bad evidence \$evidence"; exit 1 ;;
+esac
+[ ! -L "\$state" ] || { mark "state symlink"; exit 1; }
+[ ! -L "\$evidence" ] || { mark "evidence symlink"; exit 1; }
+[ -f "\$state/bin/libfakevideo.so" ] || { mark "shim missing"; exit 1; }
+base=\${state##*/}
+"\$CLI" check-private "\$state" >/dev/null || { mark "resolved private failed"; exit 1; }
+"\$CLI" check-private "/tmp/\$base" >/dev/null || { mark "tmp path private failed"; exit 1; }
+mark "private_ok"
+mkdir -m 700 /private/tmp/vmv-canary || exit 1
+printf 'keep\n' > /private/tmp/vmv-canary/keep.txt || exit 1
+ln -s vmv-canary /private/tmp/vmv-canary-link || exit 1
+if "\$CLI" check-private /tmp/vmv-canary-link >/dev/null 2>&1; then
+  mark "link accepted"
+  exit 1
+fi
+if "\$CLI" check-private /private/tmp/vmv-canary-link >/dev/null 2>&1; then
+  mark "resolved link accepted"
+  exit 1
+fi
+[ "\$(cat /private/tmp/vmv-canary/keep.txt)" = keep ] || { mark "canary changed"; exit 1; }
+mark "link_refused"
+ln -s /etc "\$state/scratch/jump" || exit 1
+if "\$CLI" check-private "\$state/scratch/jump" >/dev/null 2>&1; then
+  mark "nested accepted"
+  exit 1
+fi
+[ -L "\$state/scratch/jump" ] || { mark "nested replaced"; exit 1; }
+rm -f "\$state/scratch/jump" || exit 1
+mark "nested_refused"
+doc=\$("\$CLI" doctor --id "\$id" 2>>"\$result") || {
+  printf '%s\n' "\$doc" >> "\$result"
+  exit 1
+}
+printf '%s\n' "\$doc" | grep -F -x -q 'doctor: ok' || { mark "doctor failed"; exit 1; }
+mark "doctor_ok"
+clean=\$("\$CLI" cleanup --id "\$id") || {
+  printf '%s\n' "\$clean" >> "\$result"
+  exit 1
+}
+printf '%s\n' "\$clean" | grep -F -x -q cleaned || { mark "cleanup failed"; exit 1; }
+[ ! -d "\$state" ] || { mark "state remained"; exit 1; }
+mark "cleaned_ok"
+rm -rf /private/tmp/vmv-canary /private/tmp/vmv-canary-link "\$evidence" || exit 1
+EOF
+  chmod 700 "$REGRESS/inside.sh" || return 1
+  cat > "$REGRESS/mac-outer.sh" << EOF || return 1
+#!/bin/bash
+set -eu
+root=$root_q
+store=$store_q
+regress=$regress_q
+mount --bind /usr "\$root/usr"
+mount --bind /proc "\$root/proc"
+mount --bind /etc "\$root/etc"
+mount --bind /home "\$root/home"
+mount --bind /agent "\$root/agent"
+if [ -d /opt ]; then
+  mount --bind /opt "\$root/opt" || true
+fi
+mount --bind "\$store" "\$root/private/tmp"
+chmod 1777 "\$root/private/tmp"
+for node in null zero urandom random tty; do
+  mount --bind "/dev/\$node" "\$root/dev/\$node"
+done
+mount --bind "\$regress" "\$root/work"
+/usr/sbin/chroot "\$root" /usr/bin/bash /work/inside.sh
+EOF
+  chmod 700 "$REGRESS/mac-outer.sh" || return 1
+  capture unshare --user --map-root-user --mount bash "$REGRESS/mac-outer.sh"
+  if [ "$CAP_STATUS" -ne 0 ]; then
+    if [ -f "$REGRESS/result.txt" ]; then
+      fail "tmp symlink launch failed: $(cat "$REGRESS/result.txt") $CAP_OUT"
+    else
+      fail "tmp symlink launch failed: $CAP_OUT"
+    fi
+    return 1
+  fi
+  if ! grep -F -x -q private_ok "$REGRESS/result.txt"; then
+    fail "private dir marker missing: $(cat "$REGRESS/result.txt")"
+    return 1
+  fi
+  if ! grep -F -x -q link_refused "$REGRESS/result.txt"; then
+    fail "link refusal marker missing"
+    return 1
+  fi
+  if ! grep -F -x -q nested_refused "$REGRESS/result.txt"; then
+    fail "nested refusal marker missing"
+    return 1
+  fi
+  if ! grep -F -x -q doctor_ok "$REGRESS/result.txt"; then
+    fail "doctor marker missing"
+    return 1
+  fi
+  if ! grep -F -x -q cleaned_ok "$REGRESS/result.txt"; then
+    fail "cleanup marker missing"
+    return 1
+  fi
+  if [ -d /private/tmp ]; then
+    if find /private/tmp -maxdepth 1 \( -name 'vmvrun.*' -o -name 'vmvevd.*' -o -name 'vmv-canary*' \) -print | grep -q .; then
+      fail "fake root leaked onto the host /private/tmp"
+      return 1
+    fi
+  fi
+  return 0
+}
+
 test_source_shape() {
   local token file
   token=$(printf '%s%s' 'map' 'file')
@@ -1155,6 +1430,7 @@ run_test stop-and-space-deadline test_stop_and_space_deadline
 run_test git-copy-and-isolation test_git_copy_and_isolation
 run_test watch-chmod-handlers test_watch_chmod_handlers
 run_test names-urls-and-die test_names_urls_and_die
+run_test tmp-symlink-base test_tmp_symlink_base
 run_test source-shape test_source_shape
 
 printf 'regression ok\n'

@@ -21,6 +21,8 @@ Stdout is three lines: `run_id=`, `state=`, and `evidence=`. Ready means `doctor
 
 On Linux without `/dev/video0`, launch compiles the camera shim before it prints ready. On Darwin, launch does not compile a shim. A later command sets `CFFIXED_USER_HOME` to the isolated home. Cleanup of a failed launch removes the new state and evidence directories.
 
+On macOS, `/tmp` is a symlink to `/private/tmp`. Launch resolves that base with `realpath` before the private-directory check and records the real path. A symlink anywhere below the resolved base is still refused, including a link whose target is a private directory.
+
 ## Doctor
 
 ```bash

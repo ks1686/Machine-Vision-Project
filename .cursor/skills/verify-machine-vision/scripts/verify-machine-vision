@@ -52,6 +52,12 @@ cmd_launch() {
   LAUNCH_STATE=$state
   evidence=$(mktemp -d /tmp/vmvevd.XXXXXXXX) || die "mktemp failed"
   LAUNCH_EVIDENCE=$evidence
+  # macOS /tmp is a symlink to /private/tmp. Resolve that base, then refuse
+  # any symlink below it. A failed resolve leaves LAUNCH_STATE on the mktemp path.
+  state=$(python3 "$GUARD" resolve-scratch "$state") || die "state directory is not private"
+  LAUNCH_STATE=$state
+  evidence=$(python3 "$GUARD" resolve-scratch "$evidence") || die "evidence directory is not private"
+  LAUNCH_EVIDENCE=$evidence
   assert_private_or_drop "$state" || die "state directory is not private"
   assert_private_or_drop "$evidence" || die "evidence directory is not private"
   run_id=$(new_run_id) || die "could not mint a run id"

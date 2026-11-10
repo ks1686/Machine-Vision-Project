@@ -56,21 +56,132 @@ def scratch_ok(path: str) -> bool:
     return under_prefix(resolved, TMP_PREFIXES)
 
 
-def symlink_component(path: str) -> bool:
+def _absolute_parts(path: str) -> list[str]:
     if not path.startswith(os.sep):
         path = os.path.abspath(path)
+    return [part for part in path.split(os.sep) if part]
+
+
+def _walk_components(path: str):
     current = os.sep
-    parts = [part for part in path.split(os.sep) if part]
-    for part in parts:
+    for part in _absolute_parts(path):
         current = os.path.join(current, part)
-        if os.path.islink(current):
+        yield current
+
+
+def symlink_component_strict(path: str) -> bool:
+    """True when any path component is a symlink. No scratch-root exception."""
+    for current in _walk_components(path):
+        try:
+            if os.path.islink(current):
+                return True
+        except OSError:
             return True
     return False
+
+
+def scratch_base_link_ok(component: str) -> bool:
+    """True only for the macOS /tmp symlink to a real /private/tmp directory."""
+    if component != "/tmp":
+        return False
+    try:
+        if not os.path.islink("/tmp"):
+            return False
+        resolved = os.path.realpath("/tmp")
+        if resolved != "/private/tmp":
+            return False
+        if symlink_component_strict(resolved):
+            return False
+        info = os.lstat(resolved)
+    except OSError:
+        return False
+    return stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode)
+
+
+def symlink_component(path: str) -> bool:
+    """True when a component other than the macOS /tmp base is a symlink.
+
+    /tmp -> /private/tmp is the scratch base on macOS. A symlink below that
+    resolved directory is still hostile.
+    """
+    for current in _walk_components(path):
+        try:
+            linked = os.path.islink(current)
+        except OSError:
+            return True
+        if linked and not scratch_base_link_ok(current):
+            return True
+    return False
+
+
+def scratch_root_of(path: str) -> str | None:
+    """Logical /tmp or /private/tmp prefix, when the path uses one."""
+    logical = path if path.startswith(os.sep) else os.path.abspath(path)
+    for root in TMP_PREFIXES:
+        if logical == root or logical.startswith(root + os.sep):
+            return root
+    return None
+
+
+def resolved_scratch_base(path: str) -> str | None:
+    """Real directory behind the scratch root. /tmp may resolve to /private/tmp."""
+    root = scratch_root_of(path)
+    if root is None:
+        return None
+    try:
+        if os.path.islink(root):
+            if not scratch_base_link_ok(root):
+                return None
+        elif symlink_component_strict(root):
+            return None
+        resolved = os.path.realpath(root)
+    except OSError:
+        return None
+    if symlink_component_strict(resolved):
+        return None
+    return resolved
+
+
+def path_under_base(path: str, base: str) -> bool:
+    return path == base or path.startswith(base + os.sep)
+
+
+def resolve_scratch(path: str) -> str:
+    """Real path of a scratch directory.
+
+    Follows /tmp only when it is the macOS link to /private/tmp.
+    Refuses a symlink in any component below that resolved base.
+    """
+    logical = path if path.startswith(os.sep) else os.path.abspath(path)
+    if scratch_root_of(logical) is None:
+        die(f"refusing scratch path: {logical}")
+    if symlink_component(logical) or os.path.islink(logical):
+        die(f"refusing symlink dir: {logical}")
+    base = resolved_scratch_base(logical)
+    if base is None:
+        die(f"refusing symlink dir: {logical}")
+    try:
+        real = os.path.realpath(logical)
+    except OSError as exc:
+        die(f"unreadable: {logical}: {exc}")
+    if os.path.islink(real) or symlink_component_strict(real):
+        die(f"refusing symlink dir: {logical}")
+    if not path_under_base(real, base) or not scratch_ok(real):
+        die(f"refusing path outside the scratch base: {logical}")
+    return real
 
 
 def assert_private_dir(path: str) -> None:
     if symlink_component(path) or os.path.islink(path):
         die(f"refusing symlink dir: {path}")
+    base = resolved_scratch_base(path)
+    try:
+        real = os.path.realpath(path)
+    except OSError as exc:
+        die(f"unreadable: {path}: {exc}")
+    if base is not None:
+        if not path_under_base(real, base) or symlink_component_strict(real):
+            die(f"refusing path outside the scratch base: {path}")
     try:
         st = os.lstat(path)
     except OSError as exc:
@@ -482,7 +593,15 @@ def find_runs(prefix: str, run_id: str) -> None:
                 die(f"unreadable: {id_path}: {exc}")
             if text not in (run_id, run_id + "\n"):
                 continue
-            found.append(entry.path)
+            try:
+                resolved = os.path.realpath(entry.path)
+            except OSError as exc:
+                die(f"unreadable: {entry.path}: {exc}")
+            if symlink_component(entry.path) or symlink_component_strict(resolved):
+                continue
+            if not scratch_ok(resolved):
+                continue
+            found.append(resolved)
     if len(found) != 1:
         die(f"expected one {prefix} dir for {run_id}, found {len(found)}")
     print(found[0])
@@ -530,6 +649,9 @@ def main(argv: list[str]) -> None:
     if command == "private-dir":
         assert_private_dir(args[0])
         print("ok")
+        return
+    if command == "resolve-scratch":
+        print(resolve_scratch(args[0]))
         return
     if command == "hash-tree":
         print(hash_tree(args[0]))
