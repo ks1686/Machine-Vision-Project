@@ -101,10 +101,27 @@ list_leaks() {
   done
 }
 
+remove_extra_dirs() {
+  local dir
+  [ -n "${REGRESS:-}" ] || return 0
+  [ -f "$REGRESS/extra-dirs" ] || return 0
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    case "$dir" in
+      /opt/cursor/vmv-regress.*|/opt/vmv-regress.*|/var/tmp/vmv-regress.*) ;;
+      *) continue ;;
+    esac
+    if [ -d "$dir" ] || [ -L "$dir" ]; then
+      rm -rf -- "$dir" || true
+    fi
+  done < "$REGRESS/extra-dirs"
+}
+
 finish() {
   local status=$?
   trap - EXIT
   PATH=$REAL_PATH
+  remove_extra_dirs || true
   if [ -n "${REGRESS:-}" ] && [ -d "$REGRESS" ]; then
     remove_recorded || true
     loosen "$REGRESS" || true
@@ -486,9 +503,13 @@ EOF
   abort_spawn || return 1
   spawn_setsid sleep 30 || return 1
   note_spawn || return 1
-  abort_spawn || fail "failed launch did not kill the child"
+  abort_spawn || {
+    fail "failed launch did not kill the child"
+    return 1
+  }
   if "$REAL_PS" -p "$SPAWN_PID" >/dev/null; then
     fail "abort left the child running"
+    return 1
   fi
 }
 
@@ -1214,7 +1235,10 @@ darwin_tmp_symlink_launch() {
 }
 
 linux_tmp_symlink_launch() {
-  local root store home_q cli_q root_q store_q regress_q
+  local harness marker label root store root_q store_q regress_q harness_q marker_q real_home
+  harness=${1:-$SCRIPT_DIR}
+  marker=${2:-}
+  label=${3:-script-dir}
   if ! command -v unshare >/dev/null 2>&1; then
     fail "unshare is required to simulate a /tmp symlink"
     return 1
@@ -1223,9 +1247,26 @@ linux_tmp_symlink_launch() {
     fail "chroot is required to simulate a /tmp symlink"
     return 1
   fi
+  [ -d "$harness" ] || {
+    fail "harness directory is missing ($label)"
+    return 1
+  }
+  [ -x "$harness/verify-machine-vision" ] || {
+    fail "harness script is missing ($label)"
+    return 1
+  }
+  real_home=$(CDPATH= cd -- "$REAL_HOME" && pwd -P) || {
+    fail "real home is not a directory"
+    return 1
+  }
+  harness=$(CDPATH= cd -- "$harness" && pwd -P) || {
+    fail "harness directory is not reachable ($label)"
+    return 1
+  }
   root="$REGRESS/macroot"
   store="$REGRESS/mac-private"
-  mkdir -p "$root/usr" "$root/private/tmp" "$root/proc" "$root/dev" "$root/etc" "$root/home" "$root/agent" "$root/work" "$store" || return 1
+  rm -rf "$root" "$store" || return 1
+  mkdir -p "$root/usr" "$root/private/tmp" "$root/proc" "$root/dev" "$root/etc" "$root/vmv-harness" "$root/real-home" "$root/work" "$store" || return 1
   chmod 1777 "$store" || return 1
   ln -s usr/bin "$root/bin" || return 1
   ln -s usr/lib "$root/lib" || return 1
@@ -1237,21 +1278,27 @@ linux_tmp_symlink_launch() {
   : > "$root/dev/urandom" || return 1
   : > "$root/dev/random" || return 1
   : > "$root/dev/tty" || return 1
-  home_q=$(printf '%q' "$REAL_HOME") || return 1
-  cli_q=$(printf '%q' "$CLI") || return 1
   root_q=$(printf '%q' "$root") || return 1
   store_q=$(printf '%q' "$store") || return 1
   regress_q=$(printf '%q' "$REGRESS") || return 1
+  harness_q=$(printf '%q' "$harness") || return 1
+  marker_q=$(printf '%q' "$marker") || return 1
   cat > "$REGRESS/inside.sh" << EOF || return 1
 #!/bin/bash
 set -eu
 export PATH=/usr/bin:/bin
-export HOME=$home_q
+export HOME=/real-home
 cd /
-CLI=$cli_q
+CLI=/vmv-harness/verify-machine-vision
+expect=$marker_q
 result=/work/result.txt
 : > "\$result"
 mark() { printf '%s\n' "\$1" >> "\$result"; }
+if [ -n "\$expect" ]; then
+  got=\$(cat /vmv-harness/location.marker) || { mark "marker unreadable"; exit 1; }
+  [ "\$got" = "\$expect" ] || { mark "wrong harness"; exit 1; }
+  mark harness_ok
+fi
 out=\$("\$CLI" launch --repo /work/repo 2>>"\$result") || {
   printf '%s\n' "\$out" >> "\$result"
   exit 1
@@ -1318,14 +1365,14 @@ set -eu
 root=$root_q
 store=$store_q
 regress=$regress_q
+harness=$harness_q
+real_home=$(printf '%q' "$real_home")
 mount --bind /usr "\$root/usr"
 mount --bind /proc "\$root/proc"
 mount --bind /etc "\$root/etc"
-mount --bind /home "\$root/home"
-mount --bind /agent "\$root/agent"
-if [ -d /opt ]; then
-  mount --bind /opt "\$root/opt" || true
-fi
+mkdir -p "\$root/vmv-harness" "\$root/real-home"
+mount --bind "\$harness" "\$root/vmv-harness"
+mount --bind "\$real_home" "\$root/real-home"
 mount --bind "\$store" "\$root/private/tmp"
 chmod 1777 "\$root/private/tmp"
 for node in null zero urandom random tty; do
@@ -1338,11 +1385,17 @@ EOF
   capture unshare --user --map-root-user --mount bash "$REGRESS/mac-outer.sh"
   if [ "$CAP_STATUS" -ne 0 ]; then
     if [ -f "$REGRESS/result.txt" ]; then
-      fail "tmp symlink launch failed: $(cat "$REGRESS/result.txt") $CAP_OUT"
+      fail "tmp symlink launch failed ($label): $(cat "$REGRESS/result.txt") $CAP_OUT"
     else
-      fail "tmp symlink launch failed: $CAP_OUT"
+      fail "tmp symlink launch failed ($label): $CAP_OUT"
     fi
     return 1
+  fi
+  if [ -n "$marker" ]; then
+    if ! grep -F -x -q harness_ok "$REGRESS/result.txt"; then
+      fail "harness marker missing ($label): $(cat "$REGRESS/result.txt")"
+      return 1
+    fi
   fi
   if ! grep -F -x -q private_ok "$REGRESS/result.txt"; then
     fail "private dir marker missing: $(cat "$REGRESS/result.txt")"
@@ -1370,6 +1423,90 @@ EOF
       return 1
     fi
   fi
+  return 0
+}
+
+nonhome_base() {
+  local candidate base physical
+  for candidate in /opt/cursor /opt /var/tmp; do
+    [ -d "$candidate" ] && [ -w "$candidate" ] || continue
+    base=$(mktemp -d "$candidate/vmv-regress.XXXXXXXX") || continue
+    physical=$(CDPATH= cd -- "$base" && pwd -P) || {
+      rm -rf -- "$base"
+      continue
+    }
+    case "$physical" in
+      /tmp/*|/private/tmp/*)
+        rm -rf -- "$base"
+        continue
+        ;;
+    esac
+    printf '%s\n' "$base"
+    return 0
+  done
+  fail "no writable directory outside the home and /tmp"
+  return 1
+}
+
+copy_harness() {
+  local dest="$1"
+  mkdir -p "$dest" || return 1
+  cp -a "$SCRIPT_DIR/." "$dest/" || return 1
+  chmod 755 "$dest/verify-machine-vision" "$dest/regression.sh" || return 1
+}
+
+launch_copied() {
+  local cli="$1" out id state evidence clean
+  out=$("$cli" launch --repo "$REPO" 2>&1) || {
+    fail "launch failed from $cli: $out"
+    return 1
+  }
+  id=$(field "$out" run_id) || return 1
+  state=$(field "$out" state) || return 1
+  evidence=$(field "$out" evidence) || return 1
+  note_dir "$state" || return 1
+  note_dir "$evidence" || return 1
+  clean=$("$cli" cleanup --id "$id" 2>&1) || {
+    fail "cleanup failed from $cli: $clean"
+    return 1
+  }
+  if [ -d "$state" ]; then
+    fail "cleanup left state from $cli"
+    return 1
+  fi
+  if [ -d "$evidence" ]; then
+    rm -rf -- "$evidence" || return 1
+  fi
+  return 0
+}
+
+test_checkout_anywhere() {
+  local base opt_base
+  base=$(mktemp -d /tmp/vmv-regress.XXXXXXXX) || return 1
+  note_dir "$base"
+  mkdir -p "$base/real-parent" || return 1
+  copy_harness "$base/real-parent/space dir/scripts" || return 1
+  ln -s real-parent "$base/via-link" || return 1
+  launch_copied "$base/via-link/space dir/scripts/verify-machine-vision" || return 1
+  if [ "$REAL_UNAME" != "Linux" ]; then
+    return 0
+  fi
+  copy_harness "$base/scripts" || return 1
+  printf 'tmp-checkout\n' > "$base/scripts/location.marker" || return 1
+  linux_tmp_symlink_launch "$base/scripts" tmp-checkout tmp-checkout || return 1
+  copy_harness "$base/space dir/scripts" || return 1
+  printf 'space-checkout\n' > "$base/space dir/scripts/location.marker" || return 1
+  linux_tmp_symlink_launch "$base/space dir/scripts" space-checkout space-checkout || return 1
+  mkdir -p "$base/real-parent" || return 1
+  copy_harness "$base/real-parent/scripts" || return 1
+  printf 'link-checkout\n' > "$base/real-parent/scripts/location.marker" || return 1
+  linux_tmp_symlink_launch "$base/via-link/scripts" link-checkout link-checkout || return 1
+  opt_base=$(nonhome_base) || return 1
+  printf '%s\n' "$opt_base" >> "$REGRESS/extra-dirs" || return 1
+  copy_harness "$opt_base/scripts" || return 1
+  printf 'opt-checkout\n' > "$opt_base/scripts/location.marker" || return 1
+  linux_tmp_symlink_launch "$opt_base/scripts" opt-checkout opt-checkout || return 1
+  rm -rf -- "$opt_base" || return 1
   return 0
 }
 
@@ -1431,6 +1568,7 @@ run_test git-copy-and-isolation test_git_copy_and_isolation
 run_test watch-chmod-handlers test_watch_chmod_handlers
 run_test names-urls-and-die test_names_urls_and_die
 run_test tmp-symlink-base test_tmp_symlink_base
+run_test checkout-anywhere test_checkout_anywhere
 run_test source-shape test_source_shape
 
 printf 'regression ok\n'

@@ -298,13 +298,20 @@ settle_spawn() {
     if ! cmd=$(ps_command "$pid"); then
       return 1
     fi
-    if [ -n "$last" ] && [ "$cmd" = "$last" ]; then
-      SPAWN_CMD=$cmd
-      SPAWN_LSTART=$(ps_lstart "$pid") || return 1
-      SPAWN_UID=$(ps_uid "$pid") || return 1
-      return 0
-    fi
-    last=$cmd
+    case "$cmd" in
+      *os.execvp*)
+        last=""
+        ;;
+      *)
+        if [ -n "$last" ] && [ "$cmd" = "$last" ]; then
+          SPAWN_CMD=$cmd
+          SPAWN_LSTART=$(ps_lstart "$pid") || return 1
+          SPAWN_UID=$(ps_uid "$pid") || return 1
+          return 0
+        fi
+        last=$cmd
+        ;;
+    esac
     tries=$((tries - 1))
     sleep 0.05
   done

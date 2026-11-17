@@ -85,7 +85,7 @@ Recover removes the state directory, including enrolled templates and `libfakevi
 - `.cursor/skills/verify-machine-vision/scripts/verify-machine-vision recover --id RUN_ID`
 - `.cursor/skills/verify-machine-vision/scripts/regression.sh`
 
-`scripts/guard.py` is the path and snapshot checker the shell calls. `scripts/fakevideo.c` and `scripts/synthetic_face.py` are the camera scaffolding above. The regression script proves the harness checks and removes its own scratch.
+`scripts/guard.py` is the path and snapshot checker the shell calls. `scripts/fakevideo.c` and `scripts/synthetic_face.py` are the camera scaffolding above. The regression script proves the harness checks and removes its own scratch. It runs from a checkout in any directory, including a path with a space or a symlinked parent. It does not assume the tree lives under one fixed prefix.
 
 ## Unverified without a webcam or a Mac display
 
